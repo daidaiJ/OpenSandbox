@@ -152,6 +152,7 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resul
 		log.Error(err, "Failed to list pods")
 		return reconcile.Result{}, err
 	}
+	// 记录没被标记删除的pod 的数量， 并且观察这些pod的创建
 	pods := make([]*corev1.Pod, 0, len(podList.Items))
 	for i := range podList.Items {
 		pod := podList.Items[i]
@@ -185,7 +186,7 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resul
 // reconcilePool contains the main reconciliation logic
 func (r *PoolReconciler) reconcilePool(ctx context.Context, pool *sandboxv1alpha1.Pool, batchSandboxes []*sandboxv1alpha1.BatchSandbox, pods []*corev1.Pod) (ctrl.Result, error) {
 	var result ctrl.Result
-
+	// Use RetryOnConflict to handle conflicts when updating the Pool CR. This ensures that if the Pool resource is updated by another process between the time we read it and the time we try to update it, we will retry the operation with the latest version of the resource.
 	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 		// 1. Get latest Pool CR
 		latestPool := &sandboxv1alpha1.Pool{}
