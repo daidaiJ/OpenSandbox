@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node *)",
+      "Bash(npx *)",
+      "mcp__ssh-mcp-server__list-servers",
+      "mcp__ssh-mcp-server__execute-command",
+      "Bash(mkdir *)",
+      "Bash(add-type *)",
+      "Bash($bmp *)",
+      "Bash($g *)",
+      "Bash($bmp)",
+      "Bash($mono *)",
+      "Bash(new-object *)",
+      "Bash(.families)",
+      "Bash(foreach-object *)",
+      "Bash($_.name,12)",
+      "Bash($a *)",
+      "Bash('mmmmmmmmmm',$f)",
+      "Bash(.width)",
+      "Bash($b *)",
+      "Bash('iiiiiiiiii',$f)",
+      "Bash($f.dispose)",
+      "Bash($g.dispose)",
+      "Bash($bmp.dispose)",
+      "Bash($mono)",
+      "Bash(sort-object)"
+    ]
+  },
+  "$version": 4
+}
