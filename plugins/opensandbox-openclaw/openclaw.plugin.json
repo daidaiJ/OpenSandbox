@@ -1,0 +1,80 @@
+{
+  "id": "opensandbox-openclaw",
+  "name": "OpenSandbox Sandbox",
+  "description": "Create and manage OpenSandbox sandboxes: lifecycle management, shell command execution, and file operations. Use sandbox_create or sandbox_connect to obtain a sandbox_id, keep track of it, and pass it to every subsequent tool call.",
+  "version": "0.1.0",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "apiKey": {
+        "type": "string",
+        "description": "OpenSandbox API key. Prefer the OPEN_SANDBOX_API_KEY environment variable or an OpenClaw SecretRef over hardcoding."
+      },
+      "domain": {
+        "type": "string",
+        "description": "OpenSandbox lifecycle server domain (host[:port]) without scheme, e.g. api.opensandbox.io.",
+        "default": "localhost:8080"
+      },
+      "protocol": {
+        "anyOf": [
+          {
+            "type": "string",
+            "const": "http"
+          },
+          {
+            "type": "string",
+            "const": "https"
+          }
+        ],
+        "description": "Protocol used to reach the lifecycle server.",
+        "default": "http"
+      },
+      "requestTimeoutSeconds": {
+        "type": "number",
+        "description": "Timeout in seconds applied to SDK HTTP requests.",
+        "default": 30
+      },
+      "useServerProxy": {
+        "type": "boolean",
+        "description": "Route execd/file/endpoint traffic through the lifecycle server proxy. Keep enabled when the OpenClaw gateway cannot reach sandbox public endpoints directly (default deployment topology); disable only when sandbox endpoints are reachable from the plugin process.",
+        "default": true
+      },
+      "defaultImage": {
+        "type": "string",
+        "description": "Container image used by sandbox_create when no image is provided.",
+        "default": "ubuntu"
+      },
+      "maxOutputBytes": {
+        "type": "number",
+        "description": "Maximum bytes of command output or file content returned to the agent; longer output is truncated.",
+        "default": 65536
+      },
+      "sandboxCacheSize": {
+        "type": "number",
+        "description": "Upper bound of the in-process Sandbox instance LRU cache.",
+        "default": 8
+      }
+    },
+    "additionalProperties": false
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "sandbox_create",
+      "sandbox_connect",
+      "sandbox_list",
+      "sandbox_get_info",
+      "sandbox_renew",
+      "sandbox_kill",
+      "sandbox_get_endpoint",
+      "sandbox_run_command",
+      "sandbox_interrupt_command",
+      "sandbox_read_file",
+      "sandbox_write_file",
+      "sandbox_list_files",
+      "sandbox_delete_files"
+    ]
+  }
+}

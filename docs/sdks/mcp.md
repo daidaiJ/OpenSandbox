@@ -1,6 +1,6 @@
 ---
 title: MCP Sandbox Server
-description: OpenSandbox MCP Server exposes sandbox operations as MCP tools for Claude Code, Cursor, and other MCP-capable clients.
+description: OpenSandbox MCP Server exposes sandbox operations as MCP tools for Claude Code, Cursor, OpenClaw, and other MCP-capable clients.
 ---
 
 # OpenSandbox MCP Sandbox Server
@@ -8,8 +8,9 @@ description: OpenSandbox MCP Server exposes sandbox operations as MCP tools for 
 ## Overview
 
 OpenSandbox MCP Server exposes the OpenSandbox Python SDK as MCP tools for
-Claude Code, Cursor, and other MCP-capable clients. It provides focused
-sandbox lifecycle management, command execution, and text file operations.
+Claude Code, Cursor, OpenClaw, and other MCP-capable clients. It provides
+focused sandbox lifecycle management, command execution, and text file
+operations.
 
 ## Installation & Startup
 
@@ -38,7 +39,7 @@ Environment variables:
 CLI overrides:
 
 ```bash
-opensandbox-mcp --api-key ... --domain ... --protocol https
+opensandbox-mcp --api-key ... --domain ... --protocol https --use-server-proxy
 ```
 
 Config fields:
@@ -47,6 +48,9 @@ Config fields:
 - `domain`: OpenSandbox API domain, for example `api.opensandbox.io`.
 - `protocol`: `http` or `https` for API requests.
 - `request_timeout_seconds`: HTTP request timeout in seconds.
+- `use_server_proxy`: route execd/endpoint requests through the sandbox server.
+  Enable when the MCP process cannot reach sandbox endpoints directly, e.g. when
+  the sandbox server is deployed remotely.
 - `transport`: `stdio` by default, or `streamable-http`.
 
 ### Streamable HTTP
@@ -100,6 +104,55 @@ claude mcp add opensandbox-sandbox --transport http http://localhost:8000/mcp
   }
 }
 ```
+
+### OpenClaw
+
+OpenClaw connects to external MCP servers through the `mcp.servers` section of
+`~/.openclaw/openclaw.json`:
+
+```json5
+{
+  mcp: {
+    servers: {
+      "opensandbox-sandbox": {
+        command: "opensandbox-mcp",
+        args: [
+          "--api-key",
+          "your-api-key",
+          "--domain",
+          "api.opensandbox.io",
+          "--protocol",
+          "https",
+          "--use-server-proxy",
+        ],
+      },
+    },
+  },
+}
+```
+
+`--use-server-proxy` routes execd/endpoint traffic through the sandbox server
+and is recommended when the MCP process cannot reach sandbox endpoints directly
+(typical remote deployment).
+
+Or via Streamable HTTP, pointing at a running OpenSandbox MCP server started
+with `--transport streamable-http`:
+
+```json5
+{
+  mcp: {
+    servers: {
+      "opensandbox-sandbox": {
+        url: "http://localhost:8000/mcp",
+        transport: "streamable-http",
+      },
+    },
+  },
+}
+```
+
+Restart or reload the Gateway after editing the config. The `openclaw mcp`
+CLI can also manage these server definitions; see the OpenClaw docs.
 
 ## Tools
 
