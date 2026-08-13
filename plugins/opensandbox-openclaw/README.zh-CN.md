@@ -27,6 +27,71 @@ openclaw plugins inspect opensandbox-openclaw --runtime
 
 验证方式：`npm run check:bundle` 断言 `dist/` 只引用了 `openclaw` peer 与 Node.js 核心内置模块。
 
+#### 离线安装（纯配置，无需 `openclaw plugins install`）
+
+离线安装**只需要做两件事**：把插件目录拷到运行 OpenClaw 的机器上，然后在 `openclaw.json` 里写好配置。整个过程不需要联网、不需要 `npm install`、也不需要执行 `openclaw plugins install` 命令——因为构建产物自包含，`openclaw.json` 的 `plugins.load.paths` 直接指向插件目录即可加载。
+
+**第 1 步：准备插件目录（只需发布产物）**
+
+从 GitHub 下载仓库后拷贝 `plugins/opensandbox-openclaw/` 目录，或 `npm pack` 后解压 tarball。**不要**带 `node_modules/`、`src/` 等开发文件，必需文件只有：
+
+```
+opensandbox-openclaw/
+├── package.json           # 声明 openclaw.extensions → ./dist/index.js（入口）
+├── openclaw.plugin.json   # 插件 manifest（id / configSchema / contracts）
+└── dist/                  # 自包含构建产物（唯一运行时代码）
+    ├── index.js
+    ├── chunk-*.js
+    └── undici-*.js
+```
+
+**第 2 步：放到 OpenClaw 同一环境**
+
+拷到 gateway 所在机器，路径任意（支持 `~`），建议与 `openclaw plugins install` 的默认目录一致：
+
+```bash
+cp -r plugins/opensandbox-openclaw ~/.openclaw/extensions/opensandbox-openclaw
+```
+
+**第 3 步：在 `openclaw.json` 中配置（核心）**
+
+在现有 `openclaw.json` 里加两段：`plugins.load.paths` 指定插件位置，`plugins.entries` 按插件 id 启用并传入参数：
+
+```json5
+{
+  plugins: {
+    load: {
+      paths: ["~/.openclaw/extensions/opensandbox-openclaw"]  // 指向插件目录本身
+      // 也可指向父目录，自动扫描其下所有插件子目录：
+      // paths: ["~/.openclaw/extensions"]
+    },
+    entries: {
+      "opensandbox-openclaw": {
+        enabled: true,
+        config: {
+          domain: "sandbox.example.com:8090", // 自部署 lifecycle server 的 host[:port]
+          protocol: "https",                  // 按实际部署 http/https
+          apiKey: "your-secret-api-key",      // 与 server [server].api_key 一致；或用环境变量 OPEN_SANDBOX_API_KEY
+          useServerProxy: true,               // 代理模式（默认 true，保持开启）
+          requestTimeoutSeconds: 30,
+          defaultImage: "ubuntu",
+          maxOutputBytes: 65536,
+          sandboxCacheSize: 8
+        }
+      }
+    }
+  }
+}
+```
+
+**第 4 步：重启 / reload 并验证**
+
+```bash
+openclaw plugins inspect opensandbox-openclaw --runtime
+```
+
+看到 13 个 `sandbox_*` 工具注册即安装成功。完整对接自部署 server 的配置示例、流量链路与排障见 [wiki/opensandbox-openclaw-plugin-selfdeployed-server.md](../../wiki/opensandbox-openclaw-plugin-selfdeployed-server.md)。
+
 ## 配置
 
 在 `openclaw.json` 的插件配置段中配置本插件（插件 id：`opensandbox-openclaw`）：

@@ -37,6 +37,80 @@ which the gateway already provides.
 Verification: `npm run check:bundle` asserts `dist/` imports nothing but the
 `openclaw` peer and Node.js core builtins.
 
+#### Offline install (config-only, no `openclaw plugins install`)
+
+Offline install is **just two things**: copy the plugin directory onto the
+machine running OpenClaw, then configure `openclaw.json`. No network access,
+no `npm install`, and no `openclaw plugins install` command is needed — the
+build output is self-contained and `plugins.load.paths` points straight at
+the plugin directory.
+
+**Step 1: Prepare the plugin directory (release artifacts only)**
+
+Copy `plugins/opensandbox-openclaw/` from the repo, or extract an `npm pack`
+tarball. **Do not** bring `node_modules/`, `src/`, etc. Only these files are
+required:
+
+```
+opensandbox-openclaw/
+├── package.json           # declares openclaw.extensions → ./dist/index.js (entry)
+├── openclaw.plugin.json   # plugin manifest (id / configSchema / contracts)
+└── dist/                  # self-contained build output (the only runtime code)
+    ├── index.js
+    ├── chunk-*.js
+    └── undici-*.js
+```
+
+**Step 2: Place it next to OpenClaw**
+
+Any path works (`~` is expanded); matching the default `openclaw plugins install`
+location is convenient:
+
+```bash
+cp -r plugins/opensandbox-openclaw ~/.openclaw/extensions/opensandbox-openclaw
+```
+
+**Step 3: Configure `openclaw.json` (the core)**
+
+Add two blocks to your existing `openclaw.json`: `plugins.load.paths` points
+at the plugin location, `plugins.entries` enables the plugin by id and passes
+its config:
+
+```json5
+{
+  plugins: {
+    load: {
+      paths: ["~/.openclaw/extensions/opensandbox-openclaw"]  // the plugin directory itself
+      // or a parent directory (all plugin subdirectories are scanned):
+      // paths: ["~/.openclaw/extensions"]
+    },
+    entries: {
+      "opensandbox-openclaw": {
+        enabled: true,
+        config: {
+          domain: "sandbox.example.com:8090", // self-hosted lifecycle server host[:port]
+          protocol: "https",                  // http or https, matching your deployment
+          apiKey: "your-secret-api-key",      // must match server [server].api_key; or use env OPEN_SANDBOX_API_KEY
+          useServerProxy: true,               // proxy mode (default true, keep enabled)
+          requestTimeoutSeconds: 30,
+          defaultImage: "ubuntu",
+          maxOutputBytes: 65536,
+          sandboxCacheSize: 8
+        }
+      }
+    }
+  }
+}
+```
+
+**Step 4: Restart / reload and verify**
+
+```bash
+openclaw plugins inspect opensandbox-openclaw --runtime
+```
+
+The install succeeded when the 13 `sandbox_*` tools are registered.
+
 ## Configuration
 
 Configure the plugin in `openclaw.json` under the plugin config section (plugin id: `opensandbox-openclaw`):
