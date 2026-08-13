@@ -1,0 +1,37 @@
+{
+  "name": "@opensandbox/opensandbox-openclaw",
+  "version": "0.1.0",
+  "description": "OpenSandbox tool plugin for OpenClaw: sandbox lifecycle, command execution, and file operations.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "files": [
+    "dist",
+    "openclaw.plugin.json",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22.22.3"
+  },
+  "scripts": {
+    "build": "tsup",
+    "check:bundle": "node scripts/check-bundle.mjs",
+    "plugin:build": "npm run build && openclaw plugins build --entry ./dist/index.js",
+    "plugin:validate": "openclaw plugins validate --entry ./dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@alibaba-group/opensandbox": "^0.1.11",
+    "openclaw": "^2026.7.1-2",
+    "tsup": "^8.5.1",
+    "typebox": "^1.1.38",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.9"
+  },
+  "openclaw": {
+    "extensions": [
+      "./dist/index.js"
+    ]
+  }
+}
