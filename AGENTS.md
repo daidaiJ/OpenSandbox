@@ -75,6 +75,9 @@ Never:
 | Examples | `docs/examples/` + runnable code under `examples/` | Put docs in `docs/examples/`; keep example READMEs as thin pointers |
 | OSEPs | `oseps/` | `docs/community/oseps.md` only indexes GitHub proposals |
 | CONTRIBUTING, CODE_OF_CONDUCT, DEVELOPMENT | repo root / component directory | `docs/community/` links to them, does not duplicate them |
+| Research/solution docs | `wiki/` | All investigation reports, technical solutions, and optimization proposals live under `wiki/` (user convention) |
+
+**When adding a new document under `wiki/`**: update the `wiki/README.md` index in the same commit, before committing. Renames or removals of wiki documents must also be reflected in `wiki/README.md`.
 
 **When modifying user-visible or operations-visible behavior**: update `docs/` first.
 
