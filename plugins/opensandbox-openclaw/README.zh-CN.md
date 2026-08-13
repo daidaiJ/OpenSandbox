@@ -33,7 +33,7 @@ openclaw plugins inspect opensandbox-openclaw --runtime
 
 **第 1 步：准备插件目录（只需发布产物）**
 
-从 GitHub 下载仓库后拷贝 `plugins/opensandbox-openclaw/` 目录，或 `npm pack` 后解压 tarball。**不要**带 `node_modules/`、`src/` 等开发文件，必需文件只有：
+从 GitHub 克隆/下载仓库后拷贝 `plugins/opensandbox-openclaw/` 目录，或 `npm pack` 后解压 tarball。**`dist/` 已随仓库提交**——克隆下来的目录即可直接使用，无需本地构建；也不需要 `node_modules/`、`src/` 等开发文件。必需文件只有：
 
 ```
 opensandbox-openclaw/

@@ -48,8 +48,9 @@ the plugin directory.
 **Step 1: Prepare the plugin directory (release artifacts only)**
 
 Copy `plugins/opensandbox-openclaw/` from the repo, or extract an `npm pack`
-tarball. **Do not** bring `node_modules/`, `src/`, etc. Only these files are
-required:
+tarball. **`dist/` is committed to the repo** — the directory is ready to use
+right after cloning, no local build needed; `node_modules/`, `src/`, etc. are
+not required. Only these files are needed:
 
 ```
 opensandbox-openclaw/
