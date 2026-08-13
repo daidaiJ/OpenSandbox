@@ -1,5 +1,7 @@
 # OpenSandbox × OpenClaw Tool Plugin
 
+**English** | [简体中文](README.zh-CN.md)
+
 [OpenClaw](https://docs.openclaw.ai) tool plugin that exposes OpenSandbox sandboxes as native agent tools: lifecycle management, shell command execution, and file operations. Built on the official `@alibaba-group/opensandbox` JS SDK.
 
 ## Requirements
