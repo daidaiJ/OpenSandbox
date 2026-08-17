@@ -24,6 +24,8 @@ import (
 const (
 	// AnnotationEndpoints is the annotation key for storing BatchSandbox endpoints
 	AnnotationEndpoints = "sandbox.opensandbox.io/endpoints"
+	// AnnotationRuntimeID is the Pod UID of the primary ready runtime for #954 perception.
+	AnnotationRuntimeID = "sandbox.opensandbox.io/runtime-id"
 )
 
 // GetEndpoints extracts endpoint IPs from BatchSandbox annotations

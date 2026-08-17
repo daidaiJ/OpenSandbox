@@ -35,6 +35,7 @@ import (
 type runtimeView struct {
 	status          *sandboxv1alpha1.BatchSandboxStatus
 	endpointIPs     []string
+	runtimeID       string
 	resumeCompleted bool
 }
 
@@ -170,6 +171,7 @@ func buildRuntimeView(batchSbx *sandboxv1alpha1.BatchSandbox, pods []*corev1.Pod
 	newStatus.Ready = 0
 
 	ipList := make([]string, len(pods))
+	runtimeID := ""
 	for i, pod := range pods {
 		newStatus.Replicas++
 		if utils.IsAssigned(pod) {
@@ -178,6 +180,10 @@ func buildRuntimeView(batchSbx *sandboxv1alpha1.BatchSandbox, pods []*corev1.Pod
 		}
 		if pod.DeletionTimestamp == nil && pod.Status.Phase == corev1.PodRunning && utils.IsPodReady(pod) {
 			newStatus.Ready++
+			// Primary ready Pod UID is the runtime identity for silent-rebuild perception.
+			if runtimeID == "" {
+				runtimeID = string(pod.UID)
+			}
 		}
 	}
 
@@ -192,9 +198,15 @@ func buildRuntimeView(batchSbx *sandboxv1alpha1.BatchSandbox, pods []*corev1.Pod
 
 	applyBatchSandboxPhaseConditions(newStatus)
 
+	// Clear runtime identity when Failed or no ready pods so proxy reports RUNTIME_LOST.
+	if newStatus.Phase == sandboxv1alpha1.BatchSandboxPhaseFailed || newStatus.Ready == 0 {
+		runtimeID = ""
+	}
+
 	return runtimeView{
 		status:          newStatus,
 		endpointIPs:     ipList,
+		runtimeID:       runtimeID,
 		resumeCompleted: batchSbx.Status.Phase == sandboxv1alpha1.BatchSandboxPhaseResuming && newStatus.Phase == sandboxv1alpha1.BatchSandboxPhaseSucceed,
 	}
 }
@@ -251,6 +263,9 @@ func (r *BatchSandboxReconciler) persistRuntimeView(
 	if err := r.patchBatchSandboxEndpoints(ctx, batchSbx, view.endpointIPs); err != nil {
 		aggErrors = append(aggErrors, err)
 	}
+	if err := r.patchBatchSandboxRuntimeID(ctx, batchSbx, view.runtimeID); err != nil {
+		aggErrors = append(aggErrors, err)
+	}
 	if !equality.Semantic.DeepEqual(*view.status, batchSbx.Status) {
 		if isInitialUnallocatedSandbox(batchSbx, view) {
 			return 0, aggErrors
@@ -284,6 +299,50 @@ func (r *BatchSandboxReconciler) persistRuntimeView(
 		}
 	}
 	return 0, aggErrors
+}
+
+func (r *BatchSandboxReconciler) patchBatchSandboxRuntimeID(ctx context.Context, batchSbx *sandboxv1alpha1.BatchSandbox, runtimeID string) error {
+	current := ""
+	if batchSbx.Annotations != nil {
+		current = batchSbx.Annotations[AnnotationSandboxRuntimeID]
+	}
+	if current == runtimeID {
+		return nil
+	}
+	// Skip writing empty runtime-id when annotation doesn't exist yet.
+	if current == "" && runtimeID == "" {
+		return nil
+	}
+	log := logf.FromContext(ctx)
+	annotations := map[string]any{
+		AnnotationSandboxRuntimeID: runtimeID,
+	}
+	if runtimeID == "" {
+		// JSON merge patch null deletes the annotation key.
+		annotations[AnnotationSandboxRuntimeID] = nil
+	}
+	patchData, err := json.Marshal(map[string]any{
+		"metadata": map[string]any{
+			"annotations": annotations,
+		},
+	})
+	if err != nil {
+		return err
+	}
+	log.Info("Patching BatchSandbox runtime-id", "resourceVersion", batchSbx.ResourceVersion, "runtimeID", runtimeID)
+	obj := &sandboxv1alpha1.BatchSandbox{ObjectMeta: metav1.ObjectMeta{Namespace: batchSbx.Namespace, Name: batchSbx.Name}}
+	if err := r.Patch(ctx, obj, client.RawPatch(types.MergePatchType, patchData)); err != nil {
+		return err
+	}
+	if batchSbx.Annotations == nil {
+		batchSbx.Annotations = map[string]string{}
+	}
+	if runtimeID == "" {
+		delete(batchSbx.Annotations, AnnotationSandboxRuntimeID)
+	} else {
+		batchSbx.Annotations[AnnotationSandboxRuntimeID] = runtimeID
+	}
+	return nil
 }
 
 func (r *BatchSandboxReconciler) patchBatchSandboxEndpoints(ctx context.Context, batchSbx *sandboxv1alpha1.BatchSandbox, endpointIPs []string) error {

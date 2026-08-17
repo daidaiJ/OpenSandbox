@@ -551,6 +551,14 @@ class ServerConfig(BaseModel):
             "Omit from config to disable the server-side upper bound."
         ),
     )
+    runtime_id_required: bool = Field(
+        default=False,
+        description=(
+            "When true, server-proxy requests must include OpenSandbox-Runtime-Id when a "
+            "runtime identity is known. Default false for upstream compatibility; "
+            "proxy deployments that need silent-rebuild (#954) perception should set true."
+        ),
+    )
 
 
 class KubernetesRuntimeConfig(BaseModel):

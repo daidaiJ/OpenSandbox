@@ -19,10 +19,12 @@ from typing import Any, Optional
 from opensandbox_server.api.schema import Endpoint
 from opensandbox_server.services.constants import (
     SANDBOX_EGRESS_AUTH_TOKEN_METADATA_KEY,
+    SANDBOX_RUNTIME_ID_ANNOTATION_KEY,
     SANDBOX_SECURE_ACCESS_TOKEN_METADATA_KEY,
 )
 from opensandbox_server.services.endpoint_auth import (
     build_egress_auth_headers,
+    build_runtime_id_headers,
     build_secure_access_headers,
     merge_endpoint_headers,
 )
@@ -68,4 +70,15 @@ def _attach_secure_access_headers(endpoint: Endpoint, workload: Any) -> None:
     endpoint.headers = merge_endpoint_headers(
         endpoint.headers,
         build_secure_access_headers(token),
+    )
+
+
+def _attach_runtime_id_headers(endpoint: Endpoint, workload: Any) -> None:
+    """Attach runtime identity from BatchSandbox annotation (no extra API call)."""
+    runtime_id = _get_annotation(workload, SANDBOX_RUNTIME_ID_ANNOTATION_KEY)
+    if not runtime_id:
+        return
+    endpoint.headers = merge_endpoint_headers(
+        endpoint.headers,
+        build_runtime_id_headers(runtime_id),
     )

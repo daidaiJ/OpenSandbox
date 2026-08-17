@@ -96,6 +96,28 @@ def test_handle_api_error_raises_with_parsed_message() -> None:
     assert ei.value.error.message == "bad request"
 
 
+def test_handle_api_error_maps_runtime_lost_and_replaced() -> None:
+    """409 RUNTIME_LOST / RUNTIME_REPLACED surface as SandboxApiException with codes."""
+    from opensandbox.exceptions import SandboxApiException
+
+    for code in ("SANDBOX::RUNTIME_LOST", "SANDBOX::RUNTIME_REPLACED"):
+
+        class Parsed:
+            code = code
+            message = "runtime identity changed"
+
+        class Resp:
+            status_code = 409
+            parsed = Parsed()
+            headers = {"X-Request-ID": "req-runtime"}
+
+        with pytest.raises(SandboxApiException) as ei:
+            handle_api_error(Resp(), "ProxyOp")
+        assert ei.value.status_code == 409
+        assert ei.value.error.code == code
+        assert ei.value.is_retryable is False
+
+
 def test_handle_api_error_noop_on_success() -> None:
     class Resp:
         status_code = 200

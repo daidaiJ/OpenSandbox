@@ -46,4 +46,7 @@ const (
 	// Pod recycle — recorded on Pool
 	EventReasonPodRecycled      = "PodRecycled"
 	EventReasonFailedRecyclePod = "FailedRecyclePod"
+
+	// EventReasonAllocatedPodMissing is emitted when a pooled sandbox's allocated Pod is gone.
+	EventReasonAllocatedPodMissing = "AllocatedPodMissing"
 )

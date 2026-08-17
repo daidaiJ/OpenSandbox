@@ -560,6 +560,17 @@ func (allocator *defaultAllocator) getSandboxRequest(ctx context.Context, sandbo
 		}, nil
 	}
 
+	// Failed sandboxes must not auto-supplement/rebind (fail-closed for #954).
+	if sandbox.Status.Phase == sandboxv1alpha1.BatchSandboxPhaseFailed {
+		return &algorithm.SandboxRequest{
+			SandboxName:   sandbox.Name,
+			CurAllocation: allocated,
+			CurReleased:   released,
+			PodSupplement: 0,
+			ToRelease:     nil,
+		}, nil
+	}
+
 	release, err := allocator.getSandboxRelease(ctx, sandbox)
 	if err != nil {
 		return nil, err

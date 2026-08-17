@@ -1953,6 +1953,60 @@ func TestBuildRuntimeView_AddsPausedConditionFromEmptyConditions(t *testing.T) {
 	assert.Equal(t, "Sandbox is paused", paused.Message)
 }
 
+func TestBuildRuntimeView_SetsRuntimeIDFromReadyPod(t *testing.T) {
+	bs := &sandboxv1alpha1.BatchSandbox{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-bs", Namespace: "default"},
+		Status:     sandboxv1alpha1.BatchSandboxStatus{Phase: sandboxv1alpha1.BatchSandboxPhasePending},
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "ready-0", Namespace: "default", UID: "uid-ready-0"},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			PodIP: "10.0.0.1",
+			Conditions: []corev1.PodCondition{
+				{Type: corev1.PodReady, Status: corev1.ConditionTrue},
+			},
+		},
+	}
+	view := buildRuntimeView(bs, []*corev1.Pod{pod})
+	assert.Equal(t, sandboxv1alpha1.BatchSandboxPhaseSucceed, view.status.Phase)
+	assert.Equal(t, "uid-ready-0", view.runtimeID)
+
+	bs.Status.Phase = sandboxv1alpha1.BatchSandboxPhaseFailed
+	viewFailed := buildRuntimeView(bs, []*corev1.Pod{pod})
+	assert.Equal(t, "", viewFailed.runtimeID)
+}
+
+func TestFailClosedOnMissingAllocatedPods_GCsAndMarksFailed(t *testing.T) {
+	bs := &sandboxv1alpha1.BatchSandbox{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "sbx-missing",
+			Namespace: "default",
+			Annotations: map[string]string{
+				AnnoAllocStatusKey:         `{"pods":["gone-pod"]}`,
+				AnnotationSandboxRuntimeID: "old-uid",
+			},
+		},
+		Status: sandboxv1alpha1.BatchSandboxStatus{Phase: sandboxv1alpha1.BatchSandboxPhaseSucceed},
+	}
+	r := newTestReconciler(bs.DeepCopy())
+
+	err := r.failClosedOnMissingAllocatedPods(context.Background(), bs, nil)
+	require.NoError(t, err)
+	assert.Equal(t, sandboxv1alpha1.BatchSandboxPhaseFailed, bs.Status.Phase)
+	assert.Equal(t, `{"pods":[]}`, bs.Annotations[AnnoAllocStatusKey])
+
+	var podFailed *sandboxv1alpha1.BatchSandboxCondition
+	for i := range bs.Status.Conditions {
+		if bs.Status.Conditions[i].Type == sandboxv1alpha1.BatchSandboxConditionPodFailed {
+			podFailed = &bs.Status.Conditions[i]
+			break
+		}
+	}
+	require.NotNil(t, podFailed)
+	assert.Equal(t, EventReasonAllocatedPodMissing, podFailed.Reason)
+}
+
 // ---------- completePause test ----------
 
 func TestCompletePause(t *testing.T) {

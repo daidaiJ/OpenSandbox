@@ -33,8 +33,14 @@ from websockets.typing import Origin
 
 from opensandbox_server.api import lifecycle
 from opensandbox_server.api.schema import Endpoint
+from opensandbox_server.config import get_config
 from opensandbox_server.middleware.auth import SANDBOX_API_KEY_HEADER
-from opensandbox_server.services.constants import OPEN_SANDBOX_EGRESS_AUTH_HEADER, OPEN_SANDBOX_SECURE_ACCESS_HEADER
+from opensandbox_server.services.constants import (
+    OPEN_SANDBOX_EGRESS_AUTH_HEADER,
+    OPEN_SANDBOX_RUNTIME_ID_HEADER,
+    OPEN_SANDBOX_SECURE_ACCESS_HEADER,
+    SandboxErrorCodes,
+)
 from opensandbox_server.tenants.context import set_current_tenant
 from opensandbox_server.tenants.provider import TenantProviderUnavailable
 
@@ -58,6 +64,7 @@ SENSITIVE_HEADERS = {
     "cookie",
     SANDBOX_API_KEY_HEADER.lower(),
     OPEN_SANDBOX_SECURE_ACCESS_HEADER.lower(),
+    OPEN_SANDBOX_RUNTIME_ID_HEADER.lower(),
 }
 
 FORWARDED_HEADERS = {
@@ -134,6 +141,7 @@ def _filter_proxy_headers(
         endpoint_header_excluded = {
             OPEN_SANDBOX_SECURE_ACCESS_HEADER.lower(),
             OPEN_SANDBOX_EGRESS_AUTH_HEADER.lower(),
+            OPEN_SANDBOX_RUNTIME_ID_HEADER.lower(),
         } | FORWARDED_HEADERS
         forwarded.update(
             {
@@ -254,6 +262,87 @@ def _verify_secure_access(endpoint: Endpoint, caller_headers: Mapping[str, str])
         )
 
 
+def _get_header_value(headers: Mapping[str, str], header_name: str) -> str | None:
+    target = header_name.lower()
+    for key, value in headers.items():
+        if key.lower() == target:
+            return value
+    return None
+
+
+def _verify_runtime_id(endpoint: Endpoint, caller_headers: Mapping[str, str]) -> None:
+    """Lazy runtime identity gate for silent-rebuild (#954) perception.
+
+    Compares the caller's OpenSandbox-Runtime-Id to the identity attached from the
+    BatchSandbox annotation during get_endpoint (no Pod Get on this path).
+
+    HTTP may return 409 on every stale request (gate stays closed). Upper agents
+    should adopt response runtime_id on REPLACED (once per UID) — that switch is the
+    perception of a new empty environment — so N rebuilds surface as at most N
+    perceptions (missed intermediate UIDs coalesce into one lazy observe).
+    """
+    expected = None
+    if endpoint.headers:
+        expected = endpoint.headers.get(OPEN_SANDBOX_RUNTIME_ID_HEADER) or None
+    caller = _get_header_value(caller_headers, OPEN_SANDBOX_RUNTIME_ID_HEADER)
+    required = bool(get_config().server.runtime_id_required)
+
+    if not expected:
+        if caller:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": SandboxErrorCodes.RUNTIME_LOST,
+                    "message": (
+                        "Sandbox runtime identity is no longer available "
+                        "(pod missing, failed, or not ready). Recreate the sandbox."
+                    ),
+                    "runtime_id": None,
+                },
+            )
+        if required:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": SandboxErrorCodes.RUNTIME_LOST,
+                    "message": (
+                        "Sandbox runtime identity is required but not available. "
+                        "Recreate the sandbox or wait until it is ready."
+                    ),
+                    "runtime_id": None,
+                },
+            )
+        return
+
+    if caller and not hmac.compare_digest(caller.encode(), expected.encode()):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": SandboxErrorCodes.RUNTIME_REPLACED,
+                "message": (
+                    "Sandbox runtime was replaced (Pod UID changed). "
+                    "Switch OpenSandbox-Runtime-Id to the response field runtime_id "
+                    "to acknowledge that you perceived this sandbox restart/rebuild "
+                    "(treat the environment as fresh; prior state is gone)."
+                ),
+                # Current identity — agent should switch to this UUID once (≤N perceptions).
+                "runtime_id": expected,
+            },
+        )
+
+    if not caller and required:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": SandboxErrorCodes.INVALID_PARAMETER,
+                "message": (
+                    f"Missing required {OPEN_SANDBOX_RUNTIME_ID_HEADER} header. "
+                    "Pass the runtime identity from create/get_info or endpoint headers."
+                ),
+            },
+        )
+
+
 async def _proxy_http_request(
     request: Request,
     sandbox_id: str,
@@ -262,6 +351,7 @@ async def _proxy_http_request(
 ) -> StreamingResponse:
     endpoint = lifecycle.sandbox_service.get_endpoint(sandbox_id, port, resolve_internal=True)
     _verify_secure_access(endpoint, request.headers)
+    _verify_runtime_id(endpoint, request.headers)
     _schedule_proxy_renew(request, sandbox_id)
     query_string = request.url.query
     target_url = _build_proxy_target_url(endpoint, full_path, query_string, websocket=False)
@@ -420,11 +510,24 @@ async def _proxy_websocket_request(
 
     try:
         _verify_secure_access(endpoint, dict(websocket.headers))
-    except HTTPException:
+        _verify_runtime_id(endpoint, dict(websocket.headers))
+    except HTTPException as exc:
+        detail = exc.detail
+        reason = "Missing or invalid secure-access or runtime-id"
+        if isinstance(detail, dict):
+            code = detail.get("code", "")
+            if code == SandboxErrorCodes.RUNTIME_LOST:
+                reason = "Sandbox runtime lost"
+            elif code == SandboxErrorCodes.RUNTIME_REPLACED:
+                reason = "Sandbox runtime replaced"
+            elif code == SandboxErrorCodes.INVALID_PARAMETER:
+                reason = "Missing required runtime-id header"
+            elif "SECURE_ACCESS" in str(code):
+                reason = "Missing or invalid secure-access token"
         await _fail_client_websocket(
             websocket,
             status.WS_1008_POLICY_VIOLATION,
-            "Missing or invalid secure-access token",
+            reason,
         )
         return
 

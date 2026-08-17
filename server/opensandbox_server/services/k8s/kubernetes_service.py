@@ -58,7 +58,11 @@ from opensandbox_server.services.helpers import format_ingress_endpoint
 from opensandbox_server.services.k8s.create_helpers import _build_create_workload_context
 from opensandbox_server.services.k8s.error_helpers import _build_k8s_api_error, _is_not_found_error
 from opensandbox_server.services.k8s.k8s_diagnostics import K8sDiagnosticsMixin
-from opensandbox_server.services.k8s.endpoint_resolver import _attach_egress_auth_headers, _attach_secure_access_headers
+from opensandbox_server.services.k8s.endpoint_resolver import (
+    _attach_egress_auth_headers,
+    _attach_runtime_id_headers,
+    _attach_secure_access_headers,
+)
 from opensandbox_server.services.k8s.list_helpers import _build_list_sandboxes_response
 from opensandbox_server.services.k8s.volume_helper import ensure_shared_pvc_read_only_policy
 from opensandbox_server.services.k8s.status_helpers import (
@@ -68,6 +72,7 @@ from opensandbox_server.services.k8s.status_helpers import (
 from opensandbox_server.services.k8s.workload_mapper import (
     _build_sandbox_from_workload,
     _extract_platform_from_workload,
+    extensions_with_runtime_id,
 )
 from opensandbox_server.services.signing import (
     build_canonical_bytes,
@@ -972,7 +977,10 @@ class KubernetesSandboxService(K8sDiagnosticsMixin, SandboxService, ExtensionSer
                     created_at=created_at,
                     expires_at=context.expires_at,
                     metadata=request.metadata,
-                    extensions=extract_extensions_from_mapping(annotations),
+                    extensions=extensions_with_runtime_id(
+                        annotations,
+                        extract_extensions_from_mapping(annotations),
+                    ),
                     entrypoint=request.entrypoint,
                     platform=effective_platform or request.platform,
                 )
@@ -1505,6 +1513,7 @@ class KubernetesSandboxService(K8sDiagnosticsMixin, SandboxService, ExtensionSer
                 )
             if expires is None:
                 _attach_secure_access_headers(endpoint, workload)
+            _attach_runtime_id_headers(endpoint, workload)
             _attach_egress_auth_headers(endpoint, workload, port)
             return endpoint
 

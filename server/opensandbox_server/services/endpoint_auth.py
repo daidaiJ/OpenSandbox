@@ -18,7 +18,11 @@ from __future__ import annotations
 
 import secrets
 
-from opensandbox_server.services.constants import OPEN_SANDBOX_EGRESS_AUTH_HEADER, OPEN_SANDBOX_SECURE_ACCESS_HEADER
+from opensandbox_server.services.constants import (
+    OPEN_SANDBOX_EGRESS_AUTH_HEADER,
+    OPEN_SANDBOX_RUNTIME_ID_HEADER,
+    OPEN_SANDBOX_SECURE_ACCESS_HEADER,
+)
 
 EGRESS_AUTH_TOKEN_BYTES = 24
 SECURE_ACCESS_TOKEN_BYTES = 24
@@ -44,6 +48,11 @@ def build_secure_access_headers(token: str) -> dict[str, str]:
     return {OPEN_SANDBOX_SECURE_ACCESS_HEADER: token}
 
 
+def build_runtime_id_headers(runtime_id: str) -> dict[str, str]:
+    """Build endpoint headers carrying the sandbox runtime identity (Pod UID)."""
+    return {OPEN_SANDBOX_RUNTIME_ID_HEADER: runtime_id}
+
+
 def merge_endpoint_headers(
     existing: dict[str, str] | None,
     extra: dict[str, str],
@@ -58,6 +67,7 @@ __all__ = [
     "EGRESS_AUTH_TOKEN_BYTES",
     "SECURE_ACCESS_TOKEN_BYTES",
     "build_egress_auth_headers",
+    "build_runtime_id_headers",
     "build_secure_access_headers",
     "generate_egress_token",
     "generate_secure_access_token",

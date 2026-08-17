@@ -366,6 +366,124 @@ def test_proxy_allows_valid_secure_access_header(
     assert lowered_headers["opensandbox-ingress-to"] == "sbx-123-44772"
 
 
+def test_proxy_runtime_id_match_forwards(
+    client: TestClient,
+    auth_headers: dict,
+    monkeypatch,
+) -> None:
+    """Matching OpenSandbox-Runtime-Id is allowed and stripped from backend headers."""
+    from opensandbox_server.services.constants import OPEN_SANDBOX_RUNTIME_ID_HEADER
+
+    class StubService:
+        @staticmethod
+        def get_endpoint(sandbox_id: str, port: int, resolve_internal: bool = False) -> Endpoint:
+            return Endpoint(
+                endpoint="10.57.1.91:40109",
+                headers={OPEN_SANDBOX_RUNTIME_ID_HEADER: "pod-uid-abc"},
+            )
+
+    monkeypatch.setattr(lifecycle, "sandbox_service", StubService())
+    fake_client = _FakeAsyncClient()
+    fake_client.response = _FakeStreamingResponse(chunks=[b"ok"])
+    _set_http_client(client, fake_client)
+
+    response = client.get(
+        "/v1/sandboxes/sbx-123/proxy/44772",
+        headers={**auth_headers, OPEN_SANDBOX_RUNTIME_ID_HEADER: "pod-uid-abc"},
+    )
+    assert response.status_code == 200
+    lowered = {k.lower(): v for k, v in fake_client.built["headers"].items()}
+    assert OPEN_SANDBOX_RUNTIME_ID_HEADER.lower() not in lowered
+
+
+def test_proxy_runtime_id_mismatch_returns_replaced(
+    client: TestClient,
+    auth_headers: dict,
+    monkeypatch,
+) -> None:
+    from opensandbox_server.services.constants import OPEN_SANDBOX_RUNTIME_ID_HEADER, SandboxErrorCodes
+
+    class StubService:
+        @staticmethod
+        def get_endpoint(sandbox_id: str, port: int, resolve_internal: bool = False) -> Endpoint:
+            return Endpoint(
+                endpoint="10.57.1.91:40109",
+                headers={OPEN_SANDBOX_RUNTIME_ID_HEADER: "pod-uid-new"},
+            )
+
+    monkeypatch.setattr(lifecycle, "sandbox_service", StubService())
+    fake_client = _FakeAsyncClient()
+    _set_http_client(client, fake_client)
+
+    response = client.get(
+        "/v1/sandboxes/sbx-123/proxy/44772",
+        headers={**auth_headers, OPEN_SANDBOX_RUNTIME_ID_HEADER: "pod-uid-old"},
+    )
+    assert response.status_code == 409
+    body = response.json()
+    assert body["code"] == SandboxErrorCodes.RUNTIME_REPLACED
+    assert body["runtime_id"] == "pod-uid-new"
+    assert fake_client.built is None
+
+
+def test_proxy_runtime_id_caller_without_expected_returns_lost(
+    client: TestClient,
+    auth_headers: dict,
+    monkeypatch,
+) -> None:
+    from opensandbox_server.services.constants import OPEN_SANDBOX_RUNTIME_ID_HEADER, SandboxErrorCodes
+
+    class StubService:
+        @staticmethod
+        def get_endpoint(sandbox_id: str, port: int, resolve_internal: bool = False) -> Endpoint:
+            return Endpoint(endpoint="10.57.1.91:40109")
+
+    monkeypatch.setattr(lifecycle, "sandbox_service", StubService())
+    fake_client = _FakeAsyncClient()
+    _set_http_client(client, fake_client)
+
+    response = client.get(
+        "/v1/sandboxes/sbx-123/proxy/44772",
+        headers={**auth_headers, OPEN_SANDBOX_RUNTIME_ID_HEADER: "pod-uid-stale"},
+    )
+    assert response.status_code == 409
+    body = response.json()
+    assert body["code"] == SandboxErrorCodes.RUNTIME_LOST
+    assert body["runtime_id"] is None
+    assert fake_client.built is None
+
+
+def test_proxy_runtime_id_required_missing_header(
+    client: TestClient,
+    auth_headers: dict,
+    monkeypatch,
+) -> None:
+    from opensandbox_server.config import get_config
+    from opensandbox_server.services.constants import OPEN_SANDBOX_RUNTIME_ID_HEADER, SandboxErrorCodes
+
+    class StubService:
+        @staticmethod
+        def get_endpoint(sandbox_id: str, port: int, resolve_internal: bool = False) -> Endpoint:
+            return Endpoint(
+                endpoint="10.57.1.91:40109",
+                headers={OPEN_SANDBOX_RUNTIME_ID_HEADER: "pod-uid-abc"},
+            )
+
+    monkeypatch.setattr(lifecycle, "sandbox_service", StubService())
+    cfg = get_config()
+    monkeypatch.setattr(cfg.server, "runtime_id_required", True)
+    fake_client = _FakeAsyncClient()
+    _set_http_client(client, fake_client)
+
+    response = client.get(
+        "/v1/sandboxes/sbx-123/proxy/44772",
+        headers=auth_headers,
+    )
+    assert response.status_code == 409
+    assert response.json()["code"] == SandboxErrorCodes.INVALID_PARAMETER
+    assert fake_client.built is None
+
+
 def test_proxy_forwards_get_request_with_query_params(
     client: TestClient,
     auth_headers: dict,

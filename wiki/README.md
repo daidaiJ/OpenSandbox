@@ -2,6 +2,8 @@
 
 本目录集中存放针对 OpenSandbox 的调研报告、技术方案与优化方案文档（用户约定）。
 
+已落地 / 拟合入上游的二次开发改动说明见 [`changes/`](../changes/README.md)（勿与本 wiki 混放）。
+
 > **维护规则**：新增 wiki 文档时，提交前必须同步更新本 README 索引；删除/重命名文档时同样需要同步。详见根目录 `AGENTS.md`。
 
 ## 调研与分析
@@ -22,6 +24,7 @@
 | [共享存储挂载解释器镜像最小化与快速启动](opensandbox-shared-storage-interpreter-minimal-image.md) | 解释器镜像瘦身与共享存储加速启动可行性 | 可行性评估（未实施） |
 | [OpenClaw Tool Plugin 设计方案](opensandbox-openclaw-tool-plugin-design.md) | 方式 B：官方 Tool Plugin 封装 JS SDK | 方案设计 |
 | [OpenClaw 插件对接自部署 Server 配置指南](opensandbox-openclaw-plugin-selfdeployed-server.md) | 代理模式下插件对接自部署 OpenSandbox Server | 配置指南 |
+| [池化沙箱业务会话 S3 用户目录静默同步](opensandbox-pooled-session-s3-sync-middleware.md) | 中间层静默恢复/回写；不向业务暴露 exec；固定 postStop + 内部注入脚本 | 方案设计（未实施） |
 
 ## 参考
 
@@ -33,6 +36,7 @@
 
 ```
 crd-controller-reconcile-analysis ──┬── controller-defects-and-pitfalls ──┬── ephemeral-sandbox-orchestration-pattern
+                                   │                                      │         └── pooled-session-s3-sync-middleware
                                    │                                      └── shared-storage-interpreter-minimal-image
                                    └── sandbox-config-and-env-reference
 openclaw-integration-analysis ──┬── openclaw-tool-plugin-design ──┬── openclaw-plugin-selfdeployed-server

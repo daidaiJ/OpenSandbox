@@ -177,6 +177,11 @@ func (r *BatchSandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to list pods %w", err)
 	}
+	if poolStrategy.IsPooledMode() {
+		if err := r.failClosedOnMissingAllocatedPods(ctx, batchSbx, pods); err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed fail-closed missing allocated pods: %w", err)
+		}
+	}
 	podIndex, err := calPodIndex(poolStrategy, batchSbx, pods)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to cal pod index %w", err)
@@ -361,6 +366,127 @@ func (r *BatchSandboxReconciler) listPods(ctx context.Context, poolStrategy stra
 		}
 	}
 	return ret, nil
+}
+
+// failClosedOnMissingAllocatedPods GCs stale alloc-status and marks Failed when
+// annotated allocated pods are NotFound. Does not auto-supplement/rebind (#954).
+func (r *BatchSandboxReconciler) failClosedOnMissingAllocatedPods(
+	ctx context.Context,
+	batchSbx *sandboxv1alpha1.BatchSandbox,
+	livePods []*corev1.Pod,
+) error {
+	alloc, err := parseSandboxAllocation(batchSbx)
+	if err != nil {
+		return err
+	}
+	released, err := parseSandboxReleased(batchSbx)
+	if err != nil {
+		return err
+	}
+	releasedSet := sets.New[string](released.Pods...)
+	liveSet := sets.New[string]()
+	for _, pod := range livePods {
+		liveSet.Insert(pod.Name)
+	}
+
+	var missing []string
+	var liveAlloc []string
+	for _, name := range alloc.Pods {
+		if releasedSet.Has(name) {
+			liveAlloc = append(liveAlloc, name)
+			continue
+		}
+		if liveSet.Has(name) {
+			liveAlloc = append(liveAlloc, name)
+			continue
+		}
+		missing = append(missing, name)
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+
+	// Avoid false-positive Failed during the brief window where Pool wrote
+	// alloc-status but the Pod is not yet visible to this reconcile.
+	hadRuntime := batchSbx.Annotations != nil && batchSbx.Annotations[AnnotationSandboxRuntimeID] != ""
+	if batchSbx.Status.Phase != sandboxv1alpha1.BatchSandboxPhaseSucceed &&
+		batchSbx.Status.Phase != sandboxv1alpha1.BatchSandboxPhaseFailed &&
+		!hadRuntime {
+		log := logf.FromContext(ctx)
+		log.Info("Skipping fail-closed; sandbox never became ready",
+			"sandbox", batchSbx.Name, "missing", missing, "phase", batchSbx.Status.Phase)
+		return nil
+	}
+
+	log := logf.FromContext(ctx)
+	log.Info("Allocated pod(s) missing; fail-closed without rebind",
+		"sandbox", batchSbx.Name, "missing", missing, "liveAlloc", liveAlloc)
+
+	if err := r.patchSandboxAllocationPods(ctx, batchSbx, liveAlloc); err != nil {
+		return err
+	}
+
+	// Mark Failed locally so buildRuntimeView preserves the phase and clears runtime-id.
+	setConditionInStatus(
+		&batchSbx.Status,
+		sandboxv1alpha1.BatchSandboxConditionPodFailed,
+		sandboxv1alpha1.ConditionTrue,
+		EventReasonAllocatedPodMissing,
+		fmt.Sprintf("allocated pod(s) missing: %v", missing),
+	)
+	batchSbx.Status.Phase = sandboxv1alpha1.BatchSandboxPhaseFailed
+	if r.Recorder != nil {
+		r.Recorder.Eventf(
+			batchSbx,
+			corev1.EventTypeWarning,
+			EventReasonAllocatedPodMissing,
+			"Allocated pod(s) missing (no auto-rebind): %v",
+			missing,
+		)
+	}
+	return nil
+}
+
+func (r *BatchSandboxReconciler) patchSandboxAllocationPods(
+	ctx context.Context,
+	batchSbx *sandboxv1alpha1.BatchSandbox,
+	pods []string,
+) error {
+	// nil slice marshals as "pods":null; annotation contract expects [].
+	if pods == nil {
+		pods = []string{}
+	}
+	alloc := SandboxAllocation{Pods: pods}
+	raw, err := json.Marshal(alloc)
+	if err != nil {
+		return err
+	}
+	current := ""
+	if batchSbx.Annotations != nil {
+		current = batchSbx.Annotations[AnnoAllocStatusKey]
+	}
+	if current == string(raw) {
+		return nil
+	}
+	patchData, err := json.Marshal(map[string]any{
+		"metadata": map[string]any{
+			"annotations": map[string]string{
+				AnnoAllocStatusKey: string(raw),
+			},
+		},
+	})
+	if err != nil {
+		return err
+	}
+	obj := &sandboxv1alpha1.BatchSandbox{ObjectMeta: metav1.ObjectMeta{Namespace: batchSbx.Namespace, Name: batchSbx.Name}}
+	if err := r.Patch(ctx, obj, client.RawPatch(types.MergePatchType, patchData)); err != nil {
+		return err
+	}
+	if batchSbx.Annotations == nil {
+		batchSbx.Annotations = map[string]string{}
+	}
+	batchSbx.Annotations[AnnoAllocStatusKey] = string(raw)
+	return nil
 }
 
 func (r *BatchSandboxReconciler) getTaskScheduler(ctx context.Context, batchSbx *sandboxv1alpha1.BatchSandbox, pods []*corev1.Pod) (taskscheduler.TaskScheduler, error) {

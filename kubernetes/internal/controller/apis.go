@@ -38,6 +38,9 @@ const (
 // AnnotationSandboxEndpoints Use the exported constant from pkg/utils
 var AnnotationSandboxEndpoints = pkgutils.AnnotationEndpoints
 
+// AnnotationSandboxRuntimeID is the Pod UID written for silent-rebuild perception.
+var AnnotationSandboxRuntimeID = pkgutils.AnnotationRuntimeID
+
 type SandboxAllocation struct {
 	Pods []string `json:"pods"`
 }

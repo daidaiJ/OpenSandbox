@@ -547,3 +547,24 @@ func TestSyncSandboxReleased_SetFailed(t *testing.T) {
 	err := allocator.SyncSandboxReleased(context.Background(), sandbox, pods)
 	assert.Error(t, err)
 }
+
+func TestGetSandboxRequest_FailedPhaseNoSupplement(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	allocator, _, syncer := newTestAllocator(ctrl)
+	replica := int32(1)
+	sandbox := &sandboxv1alpha1.BatchSandbox{
+		ObjectMeta: metav1.ObjectMeta{Name: "sbx-failed", Namespace: "ns1"},
+		Spec:       sandboxv1alpha1.BatchSandboxSpec{Replicas: &replica, PoolRef: "pool1"},
+		Status:     sandboxv1alpha1.BatchSandboxStatus{Phase: sandboxv1alpha1.BatchSandboxPhaseFailed},
+	}
+
+	syncer.EXPECT().GetAllocation(gomock.Any(), sandbox).Return(&SandboxAllocation{Pods: []string{}}, nil)
+	syncer.EXPECT().GetReleased(gomock.Any(), sandbox).Return(&AllocationReleased{Pods: []string{}}, nil)
+
+	req, err := allocator.(*defaultAllocator).getSandboxRequest(context.Background(), sandbox)
+	assert.NoError(t, err)
+	assert.Equal(t, int32(0), req.PodSupplement)
+	assert.Equal(t, "sbx-failed", req.SandboxName)
+}

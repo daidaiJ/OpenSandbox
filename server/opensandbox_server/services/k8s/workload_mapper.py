@@ -18,11 +18,27 @@ from typing import Any, Optional
 
 from opensandbox_server.api.schema import ImageSpec, PlatformSpec, Sandbox, SandboxStatus
 from opensandbox_server.extensions import extract_extensions_from_mapping
-from opensandbox_server.services.constants import SANDBOX_ID_LABEL, SANDBOX_SNAPSHOT_ID_LABEL
+from opensandbox_server.services.constants import (
+    SANDBOX_ID_LABEL,
+    SANDBOX_RUNTIME_ID_ANNOTATION_KEY,
+    SANDBOX_SNAPSHOT_ID_LABEL,
+)
 
 
 def _is_opensandbox_label(label_key: str) -> bool:
     return label_key.split("/", 1)[0] == "opensandbox.io"
+
+
+def extensions_with_runtime_id(
+    annotations: dict[str, str] | None,
+    base_extensions: dict[str, str] | None = None,
+) -> dict[str, str] | None:
+    """Merge BatchSandbox runtime-id annotation into lifecycle extensions."""
+    extensions = dict(base_extensions or {})
+    runtime_id = (annotations or {}).get(SANDBOX_RUNTIME_ID_ANNOTATION_KEY)
+    if runtime_id:
+        extensions["runtime.id"] = runtime_id
+    return extensions or None
 
 
 def _build_sandbox_from_workload(workload: Any, workload_provider: Any) -> Sandbox:
@@ -67,6 +83,10 @@ def _build_sandbox_from_workload(workload: Any, workload_provider: Any) -> Sandb
     if not snapshot_id:
         image_spec = ImageSpec(uri=image_uri) if image_uri else ImageSpec(uri="unknown")
     platform_spec = _extract_platform_from_workload(workload)
+    extensions = extensions_with_runtime_id(
+        annotations,
+        extract_extensions_from_mapping(annotations),
+    )
     return Sandbox(
         id=sandbox_id,
         status=SandboxStatus(
@@ -78,7 +98,7 @@ def _build_sandbox_from_workload(workload: Any, workload_provider: Any) -> Sandb
         created_at=creation_timestamp,
         expires_at=expires_at,
         metadata=user_metadata if user_metadata else None,
-        extensions=extract_extensions_from_mapping(annotations),
+        extensions=extensions,
         image=image_spec,
         snapshotId=snapshot_id,
         entrypoint=entrypoint,

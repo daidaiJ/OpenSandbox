@@ -202,14 +202,20 @@ DEFAULT_ERROR_CODE = "GENERAL::UNKNOWN_ERROR"
 DEFAULT_ERROR_MESSAGE = "An unexpected error occurred."
 
 
-def _normalize_error_detail(detail: Any) -> dict[str, str]:
+def _normalize_error_detail(detail: Any) -> dict[str, Any]:
     """
-    Ensure HTTP errors always conform to {"code": "...", "message": "..."}.
+    Ensure HTTP errors always include {"code": "...", "message": "..."}.
+
+    Optional additive fields such as runtime_id (proxy #954) are preserved
+    when present so agents can adopt the current identity without another Get.
     """
     if isinstance(detail, dict):
         code = detail.get("code") or DEFAULT_ERROR_CODE
         message = detail.get("message") or DEFAULT_ERROR_MESSAGE
-        return {"code": code, "message": message}
+        content: dict[str, Any] = {"code": code, "message": message}
+        if "runtime_id" in detail:
+            content["runtime_id"] = detail.get("runtime_id")
+        return content
     message = str(detail) if detail else DEFAULT_ERROR_MESSAGE
     return {"code": DEFAULT_ERROR_CODE, "message": message}
 
