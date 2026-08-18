@@ -18,7 +18,7 @@ from unittest.mock import MagicMock, patch
 from kubernetes.client import ApiException
 
 from opensandbox_server.config import KubernetesRuntimeConfig
-from opensandbox_server.services.k8s.client import K8sClient
+from opensandbox_server.services.k8s.client import K8sClient, PodNotFoundError
 
 class TestK8sClient:
     
@@ -507,3 +507,87 @@ class TestK8sClient:
         c._read_limiter = mock_limiter
         c.read_runtime_class("gvisor")
         mock_limiter.acquire.assert_called_once()
+
+    def test_exec_in_pod_returns_exit_code_and_output(self, k8s_runtime_config):
+        c = self._make_client(k8s_runtime_config)
+        fake_resp = MagicMock()
+        fake_resp.returncode = 0
+        fake_resp.read_stdout.return_value = "ok"
+        fake_resp.read_stderr.return_value = ""
+        with patch("kubernetes.stream.stream", return_value=fake_resp) as mock_stream:
+            code, output = c.exec_in_pod(
+                namespace="ns",
+                name="pod-1",
+                command=["/bin/sh", "-c", "true"],
+                container="task-executor",
+                timeout_seconds=30,
+            )
+        assert code == 0
+        assert output == "ok"
+        mock_stream.assert_called_once()
+        fake_resp.run_forever.assert_called_once_with(timeout=30)
+        fake_resp.close.assert_called_once()
+
+    def test_exec_in_pod_none_returncode_is_timeout(self, k8s_runtime_config):
+        c = self._make_client(k8s_runtime_config)
+        fake_resp = MagicMock()
+        fake_resp.returncode = None
+        fake_resp.read_stdout.return_value = ""
+        fake_resp.read_stderr.return_value = ""
+        with patch("kubernetes.stream.stream", return_value=fake_resp):
+            with pytest.raises(TimeoutError, match="timed out"):
+                c.exec_in_pod(
+                    namespace="ns",
+                    name="pod-1",
+                    command=["/bin/sh", "-c", "sleep 9"],
+                    container="task-executor",
+                    timeout_seconds=1,
+                )
+
+    def test_exec_in_pod_api_404_raises_pod_not_found(self, k8s_runtime_config):
+        c = self._make_client(k8s_runtime_config)
+        with patch(
+            "kubernetes.stream.stream",
+            side_effect=ApiException(status=404, reason="Not Found"),
+        ):
+            with pytest.raises(PodNotFoundError, match="pod-1") as exc:
+                c.exec_in_pod(
+                    namespace="ns",
+                    name="pod-1",
+                    command=["/bin/sh", "-c", "true"],
+                    container="task-executor",
+                    timeout_seconds=30,
+                )
+        assert exc.value.namespace == "ns"
+        assert exc.value.name == "pod-1"
+
+    def test_exec_in_pod_websocket_404_raises_pod_not_found(self, k8s_runtime_config):
+        c = self._make_client(k8s_runtime_config)
+        fake_resp = MagicMock()
+        fake_resp.run_forever.side_effect = Exception("Handshake status 404 Not Found")
+        with patch("kubernetes.stream.stream", return_value=fake_resp):
+            with pytest.raises(PodNotFoundError, match="pod-gone"):
+                c.exec_in_pod(
+                    namespace="ns",
+                    name="pod-gone",
+                    command=["/bin/sh", "-c", "true"],
+                    container="task-executor",
+                    timeout_seconds=30,
+                )
+        fake_resp.close.assert_called_once()
+
+    def test_exec_in_pod_api_500_is_not_pod_not_found(self, k8s_runtime_config):
+        c = self._make_client(k8s_runtime_config)
+        with patch(
+            "kubernetes.stream.stream",
+            side_effect=ApiException(status=500, reason="Internal Server Error"),
+        ):
+            with pytest.raises(ApiException) as exc:
+                c.exec_in_pod(
+                    namespace="ns",
+                    name="pod-1",
+                    command=["/bin/sh", "-c", "true"],
+                    container="task-executor",
+                    timeout_seconds=30,
+                )
+        assert exc.value.status == 500

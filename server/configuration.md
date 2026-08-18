@@ -33,8 +33,9 @@ Example files in this repository:
 12. [`[secure_runtime]`](#secure_runtime)
 13. [`[renew_intent]`](#renew_intent)
 14. [`[otel]`](#otel)
-15. [Environment variables (outside TOML)](#environment-variables-outside-toml)
-16. [Cross-field validation rules](#cross-field-validation-rules)
+15. [`[session_sync]`](#session_sync--pooled-session-s3-workspace)
+16. [Environment variables (outside TOML)](#environment-variables-outside-toml)
+17. [Cross-field validation rules](#cross-field-validation-rules)
 
 ---
 
@@ -55,6 +56,7 @@ Example files in this repository:
 | `[secure_runtime]` | No | gVisor / Kata / Firecracker |
 | `[renew_intent]` | No | Auto-renew on access |
 | `[otel]` | No | OTLP export for ingested SDK metrics |
+| `[session_sync]` | No | Silent pooled-session S3 restore/sync-out (Kubernetes BatchSandbox only) |
 
 ---
 
@@ -311,6 +313,39 @@ Optional OpenTelemetry metrics export for SDK-reported sandbox creation latency 
 
 ---
 
+## `[session_sync]` — pooled session S3 workspace
+
+Silent restore/sync-out of a per-user workspace for **pooled** (`extensions.poolRef`) Kubernetes BatchSandbox creates. Off by default. This is **not** a public SDK or OpenAPI method: callers still use `create` → use → `delete` / expiry. After the allocated pod is Ready, the lifecycle server injects a Local `postStop` hook, **starts inbound S3 restore in the background** (create does not wait for the CLI), then returns. Delete/expiry runs the hook to sync out and wipe `/shared-workspace`.
+
+**Pool prerequisites (ops, not API):** sandbox and `task-executor` must share `workspace_path` (typically an `emptyDir` at `/shared-workspace`). The executor image must include `aws` (or `rclone` when `tool = "rclone"`) and credentials (IRSA/Secret). Do not put access keys in exec command lines.
+
+Identity used to build the prefix, in order:
+
+1. `metadata.<user_id_metadata_key>` (default `user_id`)
+2. `extensions.<user_id_extension_key>` (default `session.user`)
+3. `session_id` is always the sandbox id returned by create
+4. `tenant_id` from the authenticated tenant name, else `metadata.tenant_id`, else `default_tenant_id`
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `enabled` | boolean | `false` | Master switch. Requires `runtime.type = "kubernetes"` and BatchSandbox. |
+| `prefix_template` | string | `s3://opensandbox/tenants/{tenant_id}/users/{user_id}/sessions/{session_id}` | S3 URI template. Must include `{session_id}` when enabled. Placeholders: `{tenant_id}`, `{user_id}`, `{session_id}`. |
+| `workspace_path` | string | `"/shared-workspace"` | Shared POSIX mount path inside sandbox and task-executor. |
+| `sync_out_script_name` | string | `".osb-sync-out.sh"` | Basename of the injected sync-out script written into the workspace. |
+| `container` | string | `"task-executor"` | Container that runs restore exec and Local postStop. |
+| `tool` | `"aws"` \| `"rclone"` | `"aws"` | CLI used for restore and sync-out. |
+| `post_stop_timeout_seconds` | integer | `180` | Local postStop timeout. |
+| `prepare_timeout_seconds` | integer | `30` | Timeout for the create-time prepare exec that writes the sync-out hook and starts inbound restore. Does not wait for the S3 CLI. |
+| `default_tenant_id` | string | `"default"` | Tenant path segment when multi-tenant auth is not used. |
+| `user_id_metadata_key` | string | `"user_id"` | Metadata key for the user path segment. |
+| `user_id_extension_key` | string | `"session.user"` | Extensions key fallback for the user path segment. |
+| `require_user_id` | boolean | `false` | When true, pooled create fails without a user identity. When false, postStop still wipes the workspace but S3 restore/sync-out is skipped. |
+| `proxy_gate_unprepared` | boolean | `true` | Server proxy / `get_endpoint` returns `409 SANDBOX::SESSION_NOT_PREPARED` until the prepare launcher has injected the hook (inbound restore may still be running). |
+
+Internal annotation (not a public contract for SDKs): `sandbox.opensandbox.io/session-sync` is `pending` at create and `prepared` after the launcher returns.
+
+---
+
 ## Environment variables (outside TOML)
 
 These are read by the server or runtime code in addition to the TOML file:
@@ -343,6 +378,10 @@ Rules enforced when the full `AppConfig` is parsed (see `AppConfig.validate_runt
 
 4. **`secure_runtime`**  
    - See [Secure runtime](#secure_runtime) above.
+
+5. **`session_sync.enabled = true`**  
+   - Requires `runtime.type = "kubernetes"` and `kubernetes.workload_provider` omitted or `"batchsandbox"`.  
+   - `prefix_template` must include `{session_id}` and, when `tool = "aws"`, start with `s3://`.
 
 ---
 

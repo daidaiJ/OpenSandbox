@@ -830,9 +830,167 @@ class TestKubernetesSandboxServiceCreate:
         k8s_service.workload_provider.get_endpoint_info.return_value = "10.244.0.6:8080"
         k8s_service.workload_provider.get_expiration.return_value = datetime.now(timezone.utc) + timedelta(hours=1)
 
-        # Should not raise AttributeError on None.auth
         response = await k8s_service.create_sandbox(pool_request)
         assert response.id is not None
+
+
+class TestSessionSyncCreateAndEndpoint:
+    """Pooled session S3 sync wiring on create and get_endpoint."""
+
+    @pytest.mark.asyncio
+    async def test_create_pooled_sandbox_runs_prepare_after_ready(
+        self, k8s_service, mock_workload
+    ):
+        from opensandbox_server.api.schema import CreateSandboxRequest
+        from opensandbox_server.services.constants import (
+            SANDBOX_ALLOC_STATUS_ANNOTATION_KEY,
+            SANDBOX_SESSION_SYNC_ANNOTATION_KEY,
+            SESSION_SYNC_PREPARED,
+        )
+
+        k8s_service.app_config.session_sync.enabled = True
+        k8s_service.k8s_client.exec_in_pod.return_value = (0, "")
+        mock_workload["metadata"]["annotations"][SANDBOX_ALLOC_STATUS_ANNOTATION_KEY] = (
+            '{"pods":["pool-pod-0"]}'
+        )
+        pool_request = CreateSandboxRequest(
+            extensions={"poolRef": "my-pool"},
+            metadata={"user_id": "alice"},
+        )
+        k8s_service.workload_provider.create_workload.return_value = {
+            "name": "test-sandbox-pool",
+            "uid": "pool-123",
+        }
+        k8s_service.workload_provider.get_workload.return_value = mock_workload
+        k8s_service.workload_provider.get_status.return_value = {
+            "state": "Running",
+            "reason": "",
+            "message": "Pod is running",
+            "last_transition_at": datetime.now(timezone.utc),
+        }
+
+        response = await k8s_service.create_sandbox(pool_request)
+
+        assert response.id is not None
+        k8s_service.k8s_client.exec_in_pod.assert_called_once()
+        exec_kwargs = k8s_service.k8s_client.exec_in_pod.call_args.kwargs
+        assert exec_kwargs["name"] == "pool-pod-0"
+        assert exec_kwargs["container"] == "task-executor"
+        patch_body = k8s_service.k8s_client.patch_custom_object.call_args.kwargs["body"]
+        assert (
+            patch_body["metadata"]["annotations"][SANDBOX_SESSION_SYNC_ANNOTATION_KEY]
+            == SESSION_SYNC_PREPARED
+        )
+
+    @pytest.mark.asyncio
+    async def test_create_pooled_sandbox_prepare_failure_deletes_workload(
+        self, k8s_service, mock_workload
+    ):
+        from opensandbox_server.api.schema import CreateSandboxRequest
+        from opensandbox_server.services.constants import SANDBOX_ALLOC_STATUS_ANNOTATION_KEY
+
+        k8s_service.app_config.session_sync.enabled = True
+        k8s_service.k8s_client.exec_in_pod.return_value = (1, "boom")
+        mock_workload["metadata"]["annotations"][SANDBOX_ALLOC_STATUS_ANNOTATION_KEY] = (
+            '{"pods":["pool-pod-0"]}'
+        )
+        pool_request = CreateSandboxRequest(
+            extensions={"poolRef": "my-pool"},
+            metadata={"user_id": "alice"},
+        )
+        k8s_service.workload_provider.create_workload.return_value = {
+            "name": "test-sandbox-pool",
+            "uid": "pool-123",
+        }
+        k8s_service.workload_provider.get_workload.return_value = mock_workload
+        k8s_service.workload_provider.get_status.return_value = {
+            "state": "Running",
+            "reason": "",
+            "message": "Pod is running",
+            "last_transition_at": datetime.now(timezone.utc),
+        }
+
+        with pytest.raises(HTTPException) as exc:
+            await k8s_service.create_sandbox(pool_request)
+
+        assert exc.value.status_code == 500
+        assert exc.value.detail["code"] == SandboxErrorCodes.SESSION_PREPARE_FAILED
+        k8s_service.workload_provider.delete_workload.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_create_pooled_sandbox_pod_not_found_deletes_workload(
+        self, k8s_service, mock_workload
+    ):
+        from opensandbox_server.api.schema import CreateSandboxRequest
+        from opensandbox_server.services.constants import SANDBOX_ALLOC_STATUS_ANNOTATION_KEY
+        from opensandbox_server.services.k8s.client import PodNotFoundError
+
+        k8s_service.app_config.session_sync.enabled = True
+        k8s_service.k8s_client.exec_in_pod.side_effect = PodNotFoundError(
+            "default", "pool-pod-0"
+        )
+        mock_workload["metadata"]["annotations"][SANDBOX_ALLOC_STATUS_ANNOTATION_KEY] = (
+            '{"pods":["pool-pod-0"]}'
+        )
+        pool_request = CreateSandboxRequest(
+            extensions={"poolRef": "my-pool"},
+            metadata={"user_id": "alice"},
+        )
+        k8s_service.workload_provider.create_workload.return_value = {
+            "name": "test-sandbox-pool",
+            "uid": "pool-123",
+        }
+        k8s_service.workload_provider.get_workload.return_value = mock_workload
+        k8s_service.workload_provider.get_status.return_value = {
+            "state": "Running",
+            "reason": "",
+            "message": "Pod is running",
+            "last_transition_at": datetime.now(timezone.utc),
+        }
+
+        with pytest.raises(HTTPException) as exc:
+            await k8s_service.create_sandbox(pool_request)
+
+        assert exc.value.status_code == 409
+        assert exc.value.detail["code"] == SandboxErrorCodes.K8S_POD_NOT_FOUND
+        k8s_service.workload_provider.delete_workload.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_create_pooled_sandbox_require_user_id_rejects_missing_identity(
+        self, k8s_service
+    ):
+        from opensandbox_server.api.schema import CreateSandboxRequest
+
+        k8s_service.app_config.session_sync.enabled = True
+        k8s_service.app_config.session_sync.require_user_id = True
+        pool_request = CreateSandboxRequest(extensions={"poolRef": "my-pool"})
+
+        with pytest.raises(HTTPException) as exc:
+            await k8s_service.create_sandbox(pool_request)
+
+        assert exc.value.status_code == 400
+        assert exc.value.detail["code"] == SandboxErrorCodes.INVALID_PARAMETER
+        k8s_service.workload_provider.create_workload.assert_not_called()
+
+    def test_get_endpoint_pending_session_sync_returns_409(self, k8s_service):
+        from opensandbox_server.services.constants import SANDBOX_SESSION_SYNC_ANNOTATION_KEY
+
+        k8s_service.app_config.session_sync.enabled = True
+        k8s_service.workload_provider.get_workload.return_value = {
+            "metadata": {
+                "annotations": {
+                    "sandbox.opensandbox.io/endpoints": '["10.0.0.1"]',
+                    SANDBOX_SESSION_SYNC_ANNOTATION_KEY: "pending",
+                }
+            }
+        }
+
+        with pytest.raises(HTTPException) as exc:
+            k8s_service.get_endpoint("sbx-123", 44772, resolve_internal=True)
+
+        assert exc.value.status_code == 409
+        assert exc.value.detail["code"] == SandboxErrorCodes.SESSION_NOT_PREPARED
+
 
 class TestWaitForSandboxReady:
     """_wait_for_sandbox_ready method tests"""

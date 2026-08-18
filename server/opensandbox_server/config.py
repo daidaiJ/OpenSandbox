@@ -669,6 +669,121 @@ class KubernetesRuntimeConfig(BaseModel):
     )
 
 
+class SessionSyncConfig(BaseModel):
+    """Silent pooled-session S3 workspace restore/sync-out (lifecycle server).
+
+    Off by default. When enabled, pooled create injects a fixed Local postStop
+    hook and, after the allocated pod is Ready, internally execs into
+    task-executor to restore the user prefix and write the sync-out script.
+    This is not a public SDK/OpenAPI surface.
+    """
+
+    enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable silent S3 workspace restore on pooled create and postStop "
+            "sync-out on delete/expiry. Requires Kubernetes BatchSandbox + a Pool "
+            "whose sandbox and task-executor share workspace_path."
+        ),
+    )
+    prefix_template: str = Field(
+        default="s3://opensandbox/tenants/{tenant_id}/users/{user_id}/sessions/{session_id}",
+        min_length=1,
+        description=(
+            "S3 URI template. Placeholders: {tenant_id}, {user_id}, {session_id}. "
+            "session_id is the sandbox id returned by create."
+        ),
+    )
+    workspace_path: str = Field(
+        default="/shared-workspace",
+        min_length=1,
+        description="Shared emptyDir mount path used by sandbox and task-executor.",
+    )
+    sync_out_script_name: str = Field(
+        default=".osb-sync-out.sh",
+        min_length=1,
+        description="Basename of the injected postStop sync-out script inside workspace_path.",
+    )
+    container: str = Field(
+        default="task-executor",
+        min_length=1,
+        description="Pod container that has the S3 CLI and IRSA/Secret credentials.",
+    )
+    tool: Literal["aws", "rclone"] = Field(
+        default="aws",
+        description="CLI used inside the executor container for restore and sync-out.",
+    )
+    post_stop_timeout_seconds: int = Field(
+        default=180,
+        ge=1,
+        description="Local postStop hook timeout (seconds).",
+    )
+    prepare_timeout_seconds: int = Field(
+        default=30,
+        ge=1,
+        description=(
+            "Timeout for the create-time prepare exec that writes the sync-out "
+            "hook and starts inbound restore in the background. Does not wait "
+            "for the S3 CLI to finish."
+        ),
+    )
+    default_tenant_id: str = Field(
+        default="default",
+        min_length=1,
+        description="Tenant segment when multi-tenant auth is not in use.",
+    )
+    user_id_metadata_key: str = Field(
+        default="user_id",
+        min_length=1,
+        description="CreateSandboxRequest.metadata key for the user identity segment.",
+    )
+    user_id_extension_key: str = Field(
+        default="session.user",
+        min_length=1,
+        description="CreateSandboxRequest.extensions key fallback for the user identity segment.",
+    )
+    require_user_id: bool = Field(
+        default=False,
+        description=(
+            "When true, pooled create fails unless a user identity is present. "
+            "When false, create still injects postStop cleanup but skips S3 restore/sync-out."
+        ),
+    )
+    proxy_gate_unprepared: bool = Field(
+        default=True,
+        description=(
+            "When true, server proxy/get_endpoint returns 409 while session-sync "
+            "is still pending after pooled create."
+        ),
+    )
+
+    @field_validator("workspace_path")
+    @classmethod
+    def _absolute_posix_workspace(cls, value: str) -> str:
+        path = value.strip()
+        if not path.startswith("/") or path == "/" or "\\" in path:
+            raise ValueError("[session_sync] workspace_path must be an absolute POSIX directory.")
+        return path.rstrip("/") or "/"
+
+    @field_validator("sync_out_script_name")
+    @classmethod
+    def _script_basename(cls, value: str) -> str:
+        name = value.strip()
+        if not name or name in {".", ".."} or "/" in name or "\\" in name:
+            raise ValueError("[session_sync] sync_out_script_name must be a file name, not a path.")
+        return name
+
+    @model_validator(mode="after")
+    def require_prefix_when_enabled(self) -> "SessionSyncConfig":
+        if not self.enabled:
+            return self
+        if "{session_id}" not in self.prefix_template:
+            raise ValueError("[session_sync] prefix_template must include {session_id} when enabled.")
+        if self.tool == "aws" and not self.prefix_template.startswith("s3://"):
+            raise ValueError("[session_sync] prefix_template must start with s3:// when tool = 'aws'.")
+        return self
+
+
 class ExecdInitResources(BaseModel):
     """Resource requests and limits for the execd init container."""
 
@@ -1000,6 +1115,14 @@ class AppConfig(BaseModel):
         default=None,
         description="Secure container runtime configuration (gVisor, Kata, Firecracker).",
     )
+    session_sync: SessionSyncConfig = Field(
+        default_factory=SessionSyncConfig,
+        description=(
+            "Silent pooled-session S3 workspace restore/sync-out. "
+            "Off by default; Kubernetes BatchSandbox only."
+        ),
+    )
+
     @model_validator(mode="after")
     def validate_runtime_blocks(self) -> "AppConfig":
         if self.runtime.type == "docker":
@@ -1024,6 +1147,14 @@ class AppConfig(BaseModel):
                 )
         else:
             raise ValueError(f"Unsupported runtime type '{self.runtime.type}'.")
+        if self.session_sync.enabled:
+            if self.runtime.type != "kubernetes":
+                raise ValueError("[session_sync] enabled requires runtime.type = 'kubernetes'.")
+            provider_type = (self.kubernetes.workload_provider or "batchsandbox").lower()
+            if provider_type != "batchsandbox":
+                raise ValueError(
+                    "[session_sync] enabled requires kubernetes.workload_provider = 'batchsandbox'."
+                )
         return self
 
 

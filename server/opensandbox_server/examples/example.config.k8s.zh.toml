@@ -89,3 +89,14 @@ redis.enabled = false
 # redis.dsn = "redis://127.0.0.1:6379/0"
 # redis.queue_key = "opensandbox:renew:intent"
 # redis.consumer_concurrency = 8
+
+# 池化会话 S3 静默恢复/回写。默认关闭。
+# 要求 Pool 中 sandbox 与 task-executor 共享 /shared-workspace，
+# 且 executor 镜像含 aws（或 rclone）以及 IRSA/Secret 凭证。
+# [session_sync]
+# enabled = false
+# prefix_template = "s3://my-bucket/tenants/{tenant_id}/users/{user_id}/sessions/{session_id}"
+# workspace_path = "/shared-workspace"
+# container = "task-executor"
+# tool = "aws"
+# require_user_id = false

@@ -88,3 +88,14 @@ redis.enabled = false
 # redis.dsn = "redis://127.0.0.1:6379/0"
 # redis.queue_key = "opensandbox:renew:intent"
 # redis.consumer_concurrency = 8
+
+# Silent pooled-session S3 restore/sync-out. Off by default.
+# Requires a Pool whose sandbox + task-executor share /shared-workspace
+# and an executor image with aws (or rclone) + IRSA/Secret credentials.
+# [session_sync]
+# enabled = false
+# prefix_template = "s3://my-bucket/tenants/{tenant_id}/users/{user_id}/sessions/{session_id}"
+# workspace_path = "/shared-workspace"
+# container = "task-executor"
+# tool = "aws"
+# require_user_id = false

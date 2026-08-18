@@ -887,6 +887,58 @@ def test_kubernetes_runtime_with_firecracker_is_valid():
     assert cfg.secure_runtime.k8s_runtime_class == "kata-fc"
 
 
+def test_session_sync_disabled_by_default():
+    cfg = AppConfig(
+        runtime=RuntimeConfig(type="kubernetes", execd_image="opensandbox/execd:test"),
+    )
+    assert cfg.session_sync.enabled is False
+    assert "{session_id}" in cfg.session_sync.prefix_template
+
+
+def test_session_sync_enabled_requires_session_id_placeholder():
+    with pytest.raises(ValidationError):
+        AppConfig(
+            runtime=RuntimeConfig(type="kubernetes", execd_image="opensandbox/execd:test"),
+            session_sync={
+                "enabled": True,
+                "prefix_template": "s3://bucket/users/{user_id}",
+            },
+        )
+
+
+def test_session_sync_enabled_rejects_docker_runtime():
+    with pytest.raises(ValidationError, match="kubernetes"):
+        AppConfig(
+            runtime=RuntimeConfig(type="docker", execd_image="opensandbox/execd:test"),
+            session_sync={
+                "enabled": True,
+                "prefix_template": "s3://bucket/tenants/{tenant_id}/users/{user_id}/sessions/{session_id}",
+            },
+        )
+
+
+def test_load_config_session_sync_table(tmp_path, monkeypatch):
+    _reset_config(monkeypatch)
+    toml = textwrap.dedent(
+        """
+        [runtime]
+        type = "kubernetes"
+        execd_image = "opensandbox/execd:test"
+
+        [session_sync]
+        enabled = true
+        prefix_template = "s3://my-bucket/tenants/{tenant_id}/users/{user_id}/sessions/{session_id}"
+        require_user_id = true
+        """
+    )
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(toml)
+    loaded = config_module.load_config(config_path)
+    assert loaded.session_sync.enabled is True
+    assert loaded.session_sync.require_user_id is True
+    assert loaded.session_sync.container == "task-executor"
+
+
 def test_egress_config_mode_literal():
     base = EgressConfig(image="opensandbox/egress:v1")
     assert base.mode == EGRESS_MODE_DNS

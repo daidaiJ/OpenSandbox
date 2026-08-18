@@ -41,6 +41,48 @@ POOL_AUTO_ASSIGN_REF = "*"
 _InformerKey = Tuple[str, str, str, str]  # (group, version, plural, namespace)
 
 
+class PodNotFoundError(Exception):
+    """The target pod is gone (exec 404 / NotFound)."""
+
+    def __init__(self, namespace: str, name: str):
+        self.namespace = namespace
+        self.name = name
+        super().__init__(f"Pod '{name}' not found in namespace '{namespace}'")
+
+
+def _http_status_of(exc: BaseException) -> Optional[int]:
+    for attr in ("status", "status_code", "code"):
+        value = getattr(exc, attr, None)
+        if isinstance(value, int) and value > 0:
+            return value
+    return None
+
+
+def _is_pod_not_found(exc: BaseException) -> bool:
+    """True when the exec target pod (or its exec subresource) is gone.
+
+    Covers ApiException 404, websocket handshake 404, and wrapped
+    ``pods "x" not found`` errors from the Kubernetes client.
+    """
+    seen: set[int] = set()
+    current: Optional[BaseException] = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        status = _http_status_of(current)
+        if status == 404:
+            return True
+        reason = getattr(current, "reason", None)
+        if isinstance(reason, str) and reason.replace(" ", "").lower() == "notfound":
+            return True
+        text = str(current).lower()
+        if ("not found" in text or "notfound" in text) and (
+            "pod" in text or "404" in text
+        ):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
 class K8sClient:
     """
     Unified Kubernetes API client.
@@ -404,6 +446,61 @@ class K8sClient:
             label_selector=label_selector,
         )
         return resp.items
+
+    def exec_in_pod(
+        self,
+        namespace: str,
+        name: str,
+        command: List[str],
+        container: str,
+        timeout_seconds: int,
+    ) -> Tuple[int, str]:
+        """Run a command in a pod container via the Kubernetes attach/exec API.
+
+        Returns ``(exit_code, combined_output)``. Does not log command contents.
+        Raises ``PodNotFoundError`` when the pod is missing (404 / NotFound).
+        """
+        from kubernetes.stream import stream
+
+        if timeout_seconds < 1:
+            raise ValueError("timeout_seconds must be >= 1")
+        if self._write_limiter:
+            self._write_limiter.acquire()
+        resp = None
+        try:
+            try:
+                resp = stream(
+                    self.get_core_v1_api().connect_get_namespaced_pod_exec,
+                    name,
+                    namespace,
+                    command=command,
+                    container=container,
+                    stderr=True,
+                    stdin=False,
+                    stdout=True,
+                    tty=False,
+                    _preload_content=False,
+                )
+                resp.run_forever(timeout=timeout_seconds)
+                exit_code = resp.returncode
+                stdout = resp.read_stdout() or ""
+                stderr = resp.read_stderr() or ""
+            except Exception as exc:
+                if _is_pod_not_found(exc):
+                    raise PodNotFoundError(namespace, name) from exc
+                raise
+        finally:
+            if resp is not None:
+                try:
+                    resp.close()
+                except Exception:
+                    pass
+        if exit_code is None:
+            raise TimeoutError(
+                f"pod exec timed out after {timeout_seconds}s ({namespace}/{name})"
+            )
+        combined = "".join((stdout, stderr))
+        return int(exit_code), combined
 
     def read_runtime_class(self, name: str) -> Any:
         """Read a RuntimeClass from the cluster."""

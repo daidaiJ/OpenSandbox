@@ -27,9 +27,14 @@ from opensandbox_server.config import (
     DEFAULT_EGRESS_DISABLE_IPV6,
     EGRESS_MODE_DNS,
     INGRESS_MODE_GATEWAY,
+    SessionSyncConfig,
 )
 from opensandbox_server.extensions.keys import BOOTSTRAP_EXECD_ISOLATION_KEY
-from opensandbox_server.services.constants import OPENSANDBOX_EGRESS_MITMPROXY_TRANSPARENT
+from opensandbox_server.services.constants import (
+    OPENSANDBOX_EGRESS_MITMPROXY_TRANSPARENT,
+    SANDBOX_SESSION_SYNC_ANNOTATION_KEY,
+    SESSION_SYNC_PENDING,
+)
 from opensandbox_server.services.helpers import format_ingress_endpoint
 from opensandbox_server.api.schema import Endpoint, ImageSpec, NetworkPolicy, PlatformSpec, Volume
 from opensandbox_server.services.k8s.image_pull_secret_helper import (
@@ -57,6 +62,7 @@ from opensandbox_server.services.k8s.windows_profile import (
 from opensandbox_server.services.k8s.volume_helper import apply_volumes_to_pod_spec
 from opensandbox_server.services.k8s.workload_provider import WorkloadProvider
 from opensandbox_server.services.runtime_resolver import SecureRuntimeResolver
+from opensandbox_server.services.k8s.session_sync import build_post_stop_lifecycle
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +100,9 @@ class BatchSandboxProvider(WorkloadProvider):
             bool(app_config.egress.disable_ipv6)
             if app_config and app_config.egress is not None
             else DEFAULT_EGRESS_DISABLE_IPV6
+        )
+        self.session_sync = (
+            app_config.session_sync if app_config is not None else SessionSyncConfig()
         )
 
     def supports_image_auth(self) -> bool:
@@ -372,11 +381,17 @@ class BatchSandboxProvider(WorkloadProvider):
             "replicas": 1,
             "poolRef": pool_ref,
         }
-        needs_task_template = env or entrypoint != DEFAULT_ENTRYPOINT
+        session_sync_enabled = bool(self.session_sync.enabled)
+        needs_task_template = (
+            bool(env) or entrypoint != DEFAULT_ENTRYPOINT or session_sync_enabled
+        )
         if needs_task_template:
             spec["taskTemplate"] = self._build_task_template(entrypoint, env)
         if expires_at is not None:
             spec["expireTime"] = expires_at.isoformat()
+        if session_sync_enabled:
+            annotations = dict(annotations or {})
+            annotations[SANDBOX_SESSION_SYNC_ANNOTATION_KEY] = SESSION_SYNC_PENDING
         runtime_manifest = {
             "apiVersion": f"{self.group}/{self.version}",
             "kind": "BatchSandbox",
@@ -485,12 +500,16 @@ class BatchSandboxProvider(WorkloadProvider):
 
         env_list = [{"name": k, "value": v} for k, v in env.items()] if env else []
 
+        process: Dict[str, Any] = {
+            "command": wrapped_command,
+            "env": env_list,
+        }
+        if self.session_sync.enabled:
+            process["lifecycle"] = build_post_stop_lifecycle(self.session_sync)
+
         return {
             "spec": {
-                "process": {
-                    "command": wrapped_command,
-                    "env": env_list,
-                }
+                "process": process,
             }
         }
 

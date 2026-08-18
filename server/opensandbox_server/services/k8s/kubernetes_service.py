@@ -63,6 +63,13 @@ from opensandbox_server.services.k8s.endpoint_resolver import (
     _attach_runtime_id_headers,
     _attach_secure_access_headers,
 )
+from opensandbox_server.services.k8s.session_sync import (
+    SessionPrepareError,
+    ensure_session_prepared,
+    prepare_session,
+    resolve_session_identity,
+    session_sync_applies,
+)
 from opensandbox_server.services.k8s.list_helpers import _build_list_sandboxes_response
 from opensandbox_server.services.k8s.volume_helper import ensure_shared_pvc_read_only_policy
 from opensandbox_server.services.k8s.status_helpers import (
@@ -805,6 +812,28 @@ class KubernetesSandboxService(K8sDiagnosticsMixin, SandboxService, ExtensionSer
         workload_left_alive = False
         created_managed_pvcs: list[str] = []
         try:
+            session_identity = None
+            if session_sync_applies(has_pool_ref, self.app_config.session_sync):
+                session_identity = resolve_session_identity(
+                    sandbox_id=sandbox_id,
+                    metadata=request.metadata,
+                    extensions=request.extensions,
+                    tenant=get_current_tenant(),
+                    config=self.app_config.session_sync,
+                )
+                if self.app_config.session_sync.require_user_id and not session_identity.has_user:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail={
+                            "code": SandboxErrorCodes.INVALID_PARAMETER,
+                            "message": (
+                                "Pooled session sync requires a user identity "
+                                f"(metadata.{self.app_config.session_sync.user_id_metadata_key} "
+                                f"or extensions[{self.app_config.session_sync.user_id_extension_key!r}])."
+                            ),
+                        },
+                    )
+
             context = _build_create_workload_context(
                 app_config=self.app_config,
                 request=request,
@@ -954,7 +983,27 @@ class KubernetesSandboxService(K8sDiagnosticsMixin, SandboxService, ExtensionSer
                     timeout_seconds=self.app_config.kubernetes.sandbox_create_timeout_seconds,
                     poll_interval_seconds=self.app_config.kubernetes.sandbox_create_poll_interval_seconds,
                 )
-                
+
+                if session_identity is not None:
+                    try:
+                        await asyncio.to_thread(
+                            prepare_session,
+                            k8s_client=self.k8s_client,
+                            workload=workload,
+                            namespace=self._resolve_namespace(),
+                            sandbox_id=sandbox_id,
+                            identity=session_identity,
+                            config=self.app_config.session_sync,
+                        )
+                    except SessionPrepareError as prepare_exc:
+                        raise HTTPException(
+                            status_code=prepare_exc.http_status,
+                            detail={
+                                "code": prepare_exc.code,
+                                "message": str(prepare_exc),
+                            },
+                        ) from prepare_exc
+
                 status_info = _normalize_create_status(
                     self.workload_provider.get_status(workload)
                 )
@@ -1515,6 +1564,7 @@ class KubernetesSandboxService(K8sDiagnosticsMixin, SandboxService, ExtensionSer
                 _attach_secure_access_headers(endpoint, workload)
             _attach_runtime_id_headers(endpoint, workload)
             _attach_egress_auth_headers(endpoint, workload, port)
+            ensure_session_prepared(workload, self.app_config.session_sync)
             return endpoint
 
         except HTTPException:

@@ -1642,6 +1642,49 @@ spec:
         assert body["spec"]["poolRef"] == "my-pool"
         assert "taskTemplate" not in body["spec"]
 
+    def test_create_workload_poolref_session_sync_injects_poststop_and_pending_annotation(
+        self, mock_k8s_client
+    ):
+        """When session_sync is enabled, pooled create always has postStop + pending annotation."""
+        from opensandbox_server.config import SessionSyncConfig
+        from opensandbox_server.services.constants import (
+            SANDBOX_SESSION_SYNC_ANNOTATION_KEY,
+            SESSION_SYNC_PENDING,
+        )
+
+        app_config = AppConfig(
+            runtime=RuntimeConfig(type="kubernetes", execd_image="execd:test"),
+            kubernetes=KubernetesRuntimeConfig(namespace="test-ns"),
+            session_sync=SessionSyncConfig(
+                enabled=True,
+                prefix_template="s3://bucket/tenants/{tenant_id}/users/{user_id}/sessions/{session_id}",
+            ),
+        )
+        provider = BatchSandboxProvider(mock_k8s_client, app_config=app_config)
+        mock_k8s_client.create_custom_object.return_value = {
+            "metadata": {"name": "test-id", "uid": "test-uid"}
+        }
+
+        provider.create_workload(
+            sandbox_id="test-id",
+            namespace="test-ns",
+            image_spec=ImageSpec(uri=""),
+            entrypoint=["tail", "-f", "/dev/null"],
+            env={},
+            resource_limits={},
+            labels={},
+            expires_at=None,
+            execd_image="execd:latest",
+            extensions={"poolRef": "my-pool"},
+        )
+
+        body = mock_k8s_client.create_custom_object.call_args.kwargs["body"]
+        assert body["metadata"]["annotations"][SANDBOX_SESSION_SYNC_ANNOTATION_KEY] == SESSION_SYNC_PENDING
+        lifecycle = body["spec"]["taskTemplate"]["spec"]["process"]["lifecycle"]
+        assert lifecycle["postStop"]["execMode"] == "Local"
+        assert "/shared-workspace" in lifecycle["postStop"]["exec"]["command"][2]
+        assert ".osb-sync-out.sh" in lifecycle["postStop"]["exec"]["command"][2]
+
     def test_create_workload_poolref_default_entrypoint_with_env_includes_task_template(
         self, mock_k8s_client
     ):
