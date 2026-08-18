@@ -1,7 +1,8 @@
 # 池化沙箱业务会话：S3 用户目录静默同步（中间层方案）
 
 - 日期：2026-08-17
-- 状态：方案设计（未实施）
+- 状态：部分实施（lifecycle server 中间层已落地；Pool 模板 / executor 镜像仍为运维前提）
+- 实施说明：`changes/pooled-session-s3-sync.md`
 - 关联：`wiki/opensandbox-ephemeral-sandbox-orchestration-pattern.md`、`wiki/opensandbox-shared-storage-interpreter-minimal-image.md`、`kubernetes/test/e2e` host-copy lifecycle、#954 runtime 感知
 
 ---
@@ -160,11 +161,11 @@ lifecycle:
 2. 创建 BatchSandbox（poolRef + 固定 postStop 的 taskTemplate）
 3. 等待 allocated Pod Ready
 4. 内部 K8s pods/exec → 容器 task-executor：
-     a. aws s3 sync "$S3_USER_PREFIX/" /shared-workspace/  || true   # 空前缀容忍
-     b. 写入并 chmod +x /shared-workspace/.osb-sync-out.sh
-        （脚本内硬编码本次 PREFIX，做回写）
-5. 标记会话已 prepare（内部注解/状态即可）
-6. 才对调用方返回 create 成功（Ready = 已恢复）
+     a. 写入并 chmod +x /shared-workspace/.osb-sync-out.sh
+     b. **后台**启动 inbound restore（`aws s3 sync ... || true`），不等 CLI 结束
+     exec 若遇到 Pod 已消失（404 / NotFound）：`409 KUBERNETES::POD_NOT_FOUND` 并回滚 CR，不当成泛化 500。
+5. 标记会话已 prepare（launcher 已注入；restore 可能仍在跑）
+6. 对调用方返回 create 成功
 ```
 
 注入脚本示例内容（由中间层渲染，业务不可见）：
@@ -180,7 +181,7 @@ aws s3 sync /shared-workspace/ "s3://bucket/tenants/t1/users/u123/sessions/<sand
 ```text
 调用方 delete / expireTime 到期
   → 删 CR
-  → postStop：执行 .osb-sync-out.sh（若存在）+ 清盘
+  → postStop：停掉进行中的 inbound restore → 执行 .osb-sync-out.sh（若存在）+ 清盘
   → 回池
 ```
 
@@ -188,7 +189,7 @@ aws s3 sync /shared-workspace/ "s3://bucket/tenants/t1/users/u123/sessions/<sand
 
 ### 7.3 可选访问闸门（仍不暴露能力）
 
-server proxy 若发现「已 Ready 但未 prepare」：返回 `409`（内部错误码），避免业务打到空目录。实现细节，不进入 SDK 公开能力面。
+server proxy 若发现「已 Ready 但未注入 prepare」：返回 `409`（内部错误码）。闸门覆盖的是 launcher 尚未返回的窗口；inbound restore 可能仍在后台进行。实现细节，不进入 SDK 公开能力面。
 
 ---
 
@@ -233,10 +234,11 @@ Sandbox.delete() / 到期自动删
 
 | 场景 | 建议 |
 |---|---|
-| pre-sync 失败 | create 对调用方失败；不返回「可用」沙箱（或立即删 CR） |
-| 空 S3 前缀（首启） | sync 容忍失败 / NoSuchKey |
+| pre-sync launcher 失败 | create 对调用方失败；不返回「可用」沙箱（或立即删 CR） |
+| 空 S3 前缀（首启） | 后台 sync 容忍失败 / NoSuchKey |
+| 后台 inbound 失败 | 不回滚已返回的 create；依赖观测 / 下次会话 |
 | postStop / 回写失败 | 记 `taskLastErrorMessage`；是否阻塞回池需产品决策（建议告警 + 仍清盘防串台，或失败则 Delete 该 Pod） |
-| 大目录超时 | `timeoutSeconds` 按体量配置；create 的 ready 超时覆盖 sync |
+| 大目录 | inbound 不占用 create 超时；postStop `timeoutSeconds` 按回写体量配置 |
 | #954 Pod 替换 | 本地目录清空；中间层可在 `RUNTIME_REPLACED` 后再次静默 prepare，或要求业务重建会话 |
 | 凭证 | IRSA/Secret 仅挂 task-executor；禁止把 AK/SK 打进 exec 命令行日志 |
 | IAM | 前缀级隔离：`.../users/<uid>/*` |

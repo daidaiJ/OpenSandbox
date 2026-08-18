@@ -15,6 +15,10 @@
 | [BatchSandbox 3s 轮询 Task 执行机制调研](batchsandbox-task-3s-polling-exploration.md) | controller/scheduler/task-executor/CRD 轮询执行机制 | 2026-08-07 |
 | [接入 OpenClaw 方式分析](opensandbox-openclaw-integration-analysis.md) | OpenSandbox 与 OpenClaw 集成方式对比与推荐方案 | 2026-08-12 |
 | [上游 Open Issues 风险调研（禁止暂停/恢复场景）](opensandbox-open-issues-risk-review-no-pause-resume.md) | 无状态沙箱下未修复缺陷与规模化风险（gh 拉取上游 open issues） | 2026-08-13 |
+| [Pool Pod 模板更新与 Pod 分配行为排查](opensandbox-pool-template-update-and-allocation.md) | 模板更新只重建 idle pod、分配不区分 revision、pod→sandbox 无所有权注解、换新 pod 操作指南 | 2026-08-18 |
+| [execd 目录读取工具与 Server Proxy 限制](opensandbox-execd-directory-listing-limits.md) | `/directories/list` 与 `/files/search` 限制、proxy 的 secure-access/runtime-id 门禁 | 2026-08-18 |
+| [沙箱续约机制与伪永久（manual cleanup）调研](opensandbox-sandbox-lease-and-manual-cleanup.md) | TTL 过期、renew-expiration 手动续约、OSEP-0009 自动续约、不传 timeout 伪永久 | 2026-08-18 |
+| [业务流量走 Server Proxy 代理的业务事实梳理](opensandbox-proxy-server-business-facts.md) | 连接拓扑、proxy 行为、自动续约生效条件、生命周期选择与边界 | 2026-08-18 |
 
 ## 方案设计
 
@@ -24,7 +28,7 @@
 | [共享存储挂载解释器镜像最小化与快速启动](opensandbox-shared-storage-interpreter-minimal-image.md) | 解释器镜像瘦身与共享存储加速启动可行性 | 可行性评估（未实施） |
 | [OpenClaw Tool Plugin 设计方案](opensandbox-openclaw-tool-plugin-design.md) | 方式 B：官方 Tool Plugin 封装 JS SDK | 方案设计 |
 | [OpenClaw 插件对接自部署 Server 配置指南](opensandbox-openclaw-plugin-selfdeployed-server.md) | 代理模式下插件对接自部署 OpenSandbox Server | 配置指南 |
-| [池化沙箱业务会话 S3 用户目录静默同步](opensandbox-pooled-session-s3-sync-middleware.md) | 中间层静默恢复/回写；不向业务暴露 exec；固定 postStop + 内部注入脚本 | 方案设计（未实施） |
+| [池化沙箱业务会话 S3 用户目录静默同步](opensandbox-pooled-session-s3-sync-middleware.md) | 中间层静默恢复/回写；不向业务暴露 exec；固定 postStop + 内部注入脚本 | 部分实施（server） |
 
 ## 参考
 
@@ -39,6 +43,8 @@ crd-controller-reconcile-analysis ──┬── controller-defects-and-pitfall
                                    │                                      │         └── pooled-session-s3-sync-middleware
                                    │                                      └── shared-storage-interpreter-minimal-image
                                    └── sandbox-config-and-env-reference
+                                        └── pool-template-update-and-allocation
 openclaw-integration-analysis ──┬── openclaw-tool-plugin-design ──┬── openclaw-plugin-selfdeployed-server
                                 └── open-issues-risk-review-no-pause-resume
+openclaw-tool-plugin-design ──┴── execd-directory-listing-limits
 ```

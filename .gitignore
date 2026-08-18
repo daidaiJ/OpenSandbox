@@ -1,4 +1,4 @@
-# IDE and Editor files
+.qwen/ # IDE and Editor files
 .vscode/
 .idea/
 *.swp
@@ -277,3 +277,5 @@ obj/
 
 .qoder/
 /.vs
+.qwen/settings.json
+.qwen/settings.json
