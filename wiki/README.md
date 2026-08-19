@@ -19,6 +19,7 @@
 | [execd 目录读取工具与 Server Proxy 限制](opensandbox-execd-directory-listing-limits.md) | `/directories/list` 与 `/files/search` 限制、proxy 的 secure-access/runtime-id 门禁 | 2026-08-18 |
 | [沙箱续约机制与伪永久（manual cleanup）调研](opensandbox-sandbox-lease-and-manual-cleanup.md) | TTL 过期、renew-expiration 手动续约、OSEP-0009 自动续约、不传 timeout 伪永久 | 2026-08-18 |
 | [业务流量走 Server Proxy 代理的业务事实梳理](opensandbox-proxy-server-business-facts.md) | 连接拓扑、proxy 行为、自动续约生效条件、生命周期选择与边界 | 2026-08-18 |
+| [Egress 网络策略调研](opensandbox-egress-network-policy.md) | egress 组件定位、sandbox_id 归因、域名/IP 配置、K8s 池模式预置、CAP_NET_ADMIN | 2026-08-19 |
 
 ## 方案设计
 

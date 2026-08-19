@@ -1,0 +1,88 @@
+# Pool 模板：预置 egress 网络策略
+#
+# 说明：
+# - Pool 的 pod 在分配前就创建好，生命周期 API 无法给已存在的 pod 注入 egress sidecar，
+#   因此 egress 必须手动写进 Pool 的 spec.template。
+# - 所有从该 pool 分配的沙箱共享同一套 egress 策略（OPENSANDBOX_EGRESS_RULES）。
+# - 沙箱分配后仍可通过 SDK 的 egress 客户端（patch/delete/get policy）动态调整策略。
+#
+# 使用前请替换：
+#   <task-executor-image>:<tag>  -> 你的 task-executor 镜像
+#   <egress-image>:<tag>         -> 你的 egress 镜像（如 opensandbox/egress:v1.1.6）
+#   <egress-token>               -> 你的 egress API 认证 token（可选，建议设置）
+#   <sandbox-image>              -> 你的沙箱应用镜像
+
+apiVersion: sandbox.opensandbox.io/v1alpha1
+kind: Pool
+metadata:
+  name: agent-pool
+spec:
+  template:
+    spec:
+      # 任务执行需要共享进程命名空间（task-executor 通过它管理沙箱进程）
+      shareProcessNamespace: true
+      containers:
+        # ---- 沙箱应用容器 ----
+        - name: sandbox-container
+          image: <sandbox-image>
+          command: ["sleep", "3600"]
+          ports:
+            - containerPort: 80
+
+        # ---- task-executor（pool 模式跑任务必需）----
+        - name: task-executor
+          image: <task-executor-image>:<tag>
+          securityContext:
+            privileged: true
+
+        # ---- egress sidecar（手动预置，网络策略在此定义）----
+        - name: egress
+          image: <egress-image>:<tag>
+          securityContext:
+            capabilities:
+              add: ["NET_ADMIN"]   # egress 需要 CAP_NET_ADMIN 来安装 iptables/nftables 重定向
+          env:
+            # 严格 default-deny：默认拒绝所有出站，仅放行下方 allow 列表
+            - name: OPENSANDBOX_EGRESS_MODE
+              value: "dns+nft"
+            # 网络策略（JSON，格式同 POST /policy）
+            - name: OPENSANDBOX_EGRESS_RULES
+              value: |
+                {
+                  "defaultAction": "deny",
+                  "egress": [
+                    {"action": "allow", "target": "api.github.com"},
+                    {"action": "allow", "target": "*.pypi.org"},
+                    {"action": "allow", "target": "*.openai.com"},
+                    {"action": "allow", "target": "10.96.0.0/12"}
+                  ]
+                }
+            # egress API 认证 token（可选，建议设置；SDK 动态改策略时需带上）
+            - name: OPENSANDBOX_EGRESS_TOKEN
+              value: "<egress-token>"
+          ports:
+            - name: egress-api
+              containerPort: 18080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 18080
+              httpHeaders:
+                - name: OPENSANDBOX-EGRESS-AUTH
+                  value: "<egress-token>"
+            periodSeconds: 1
+            failureThreshold: 30
+
+  capacitySpec:
+    bufferMax: 10
+    bufferMin: 2
+    poolMax: 20
+    poolMin: 5
+
+  # 可选：控制扩缩容节奏
+  scaleStrategy:
+    maxUnavailable: "20%"
+
+  # 可选：回收策略（默认 Delete）
+  recycleStrategy:
+    type: Delete
