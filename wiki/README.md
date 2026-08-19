@@ -20,6 +20,10 @@
 | [沙箱续约机制与伪永久（manual cleanup）调研](opensandbox-sandbox-lease-and-manual-cleanup.md) | TTL 过期、renew-expiration 手动续约、OSEP-0009 自动续约、不传 timeout 伪永久 | 2026-08-18 |
 | [业务流量走 Server Proxy 代理的业务事实梳理](opensandbox-proxy-server-business-facts.md) | 连接拓扑、proxy 行为、自动续约生效条件、生命周期选择与边界 | 2026-08-18 |
 | [Egress 网络策略调研](opensandbox-egress-network-policy.md) | egress 组件定位、sandbox_id 归因、域名/IP 配置、K8s 池模式预置、CAP_NET_ADMIN | 2026-08-19 |
+| [池化分配时间点动态注入技术调研](opensandbox-pool-allocation-time-injection.md) | 分配时注入配置/脚本的技术对比（taskTemplate/lifecycle/bootstrap/ConfigMap/exec） | 2026-08-19 |
+| [创建沙箱参数说明书（池化模式）](opensandbox-create-sandbox-params-reference.md) | 池化模式参数（生效/忽略/拒绝）、extensions 编解码、OSEP-0009 续约 | 2026-08-19 |
+| [沙箱管理高阶 API 与参数参考（快速检索）](opensandbox-sandbox-management-api-reference.md) | 按业务能力查 API/参数：创建/注入/续约/查询/池管理 | 2026-08-19 |
+| [示例：动态传递用户信息给 task 模板](opensandbox-task-template-user-info-injection-example.md) | user_id + user_auth_token 经 taskTemplate 注入沙箱（env / 文件两种方式） | 2026-08-19 |
 
 ## 方案设计
 
