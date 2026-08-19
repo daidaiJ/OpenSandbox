@@ -35,6 +35,12 @@ Use this file as the root router for the monorepo. Prefer the nearest `AGENTS.md
 - Surgical changes: touch only files and lines needed for the task, match local style, and do not refactor or delete unrelated pre-existing code.
 - Goal-driven execution: translate non-trivial work into verifiable success criteria, add or update focused tests when behavior changes, and loop until checks pass or blockers are clear.
 
+## Branching
+
+- `dev` is the special research/analysis branch, kept in sync with `main` as the reference baseline. Research, analysis, and business documentation (e.g. `wiki/`, `changes/`) land directly on `dev`.
+- Feature work branches off `dev` as `feat/*` branches. Code changes live on the `feat/*` branch.
+- A `feat/*` branch is merged into `dev` only after it passes review and is approved.
+
 ## Guardrails
 
 Always:
