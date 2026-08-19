@@ -12,15 +12,18 @@
 
 路由同时挂在根路径与 `/v1`。池化判定：`extensions.poolRef` 非空。
 
+相关：`pool-pod-template-cookbook.md`（Pool 模板）、`pod-lifecycle-hooks-cookbook.md`（preStart/postStop）。
+
 ## 目录
 
 - [1. 规划：create 支持 lifecycle（未落地）](#1-规划create-支持-lifecycle未落地)
-- [2. 创建沙箱 — POST /sandboxes](#2-创建沙箱--post-sandboxes)
-- [3. 查询、删除与访问](#3-查询删除与访问)
-- [4. 池管理](#4-池管理)
-- [5. 池化 create：忽略与拒绝](#5-池化-create忽略与拒绝)
-- [6. taskTemplate 生成条件](#6-tasktemplate-生成条件)
-- [7. 示例](#7-示例)
+- [2. 流量路径：proxy vs lifecycle API](#2-流量路径proxy-vs-lifecycle-api)
+- [3. 创建沙箱 — POST /sandboxes](#3-创建沙箱--post-sandboxes)
+- [4. 查询、删除与访问](#4-查询删除与访问)
+- [5. 池管理](#5-池管理)
+- [6. 池化 create：忽略与拒绝](#6-池化-create忽略与拒绝)
+- [7. taskTemplate 生成条件](#7-tasktemplate-生成条件)
+- [8. 示例](#8-示例)
 - [参考](#参考)
 
 ---
@@ -33,9 +36,46 @@
 
 ---
 
-## 2. 创建沙箱 — POST /sandboxes
+## 2. 流量路径：proxy vs lifecycle API
 
-### 2.1 请求字段
+SDK 的接口分两类：**沙箱内工具调用**（命令、文件、健康、指标、egress、credential vault）经 server proxy 转发；**沙箱生命周期管理**（创建、删除、暂停/恢复、续约、查询、metadata、快照、取端点）直连 server lifecycle API，不经 proxy。
+
+### 2.1 走 server proxy（use_server_proxy=true）
+
+SDK 创建/连接沙箱后，通过 `get_sandbox_endpoint(id, port, use_server_proxy)` 取端点；`use_server_proxy=true` 时 server 返回 `/sandboxes/{id}/proxy/{port}` 形式的 URL，SDK 以它为 base URL 发起请求。
+
+| 服务 | 端口 | 接口 |
+|---|---|---|
+| execd 命令 | 44772 | `/command`、`/session`、`/code` |
+| execd 文件 | 44772 | `/files/*`、`/directories/*` |
+| execd 健康 | 44772 | `/ping` |
+| execd 指标 | 44772 | `/metrics` |
+| 隔离会话 | 44772 | isolated sessions |
+| egress / credential vault | 18080 | egress 规则、凭证注入 |
+
+请求 URL 形如：`https://{server}/sandboxes/{id}/proxy/44772/command`。proxy 转发到沙箱内端口，并触发 renew-on-access。
+
+### 2.2 走 lifecycle API（不经 proxy）
+
+| 操作 | 路径 |
+|---|---|
+| 创建 | `POST /sandboxes` |
+| 删除 | `DELETE /sandboxes/{id}` |
+| 暂停 / 恢复 | `/sandboxes/{id}/pause`、`/resume` |
+| 续约 | `POST /sandboxes/{id}/renew-expiration` |
+| 查询 | `GET /sandboxes/{id}` |
+| metadata | `PATCH /sandboxes/{id}/metadata` |
+| 快照 | `POST/GET /sandboxes/{id}/snapshots` 等 |
+| 取端点 | `GET /sandboxes/{id}/endpoints/{port}` |
+| 诊断 | `GET /sandboxes/{id}/diagnostics/logs`、`/diagnostics/events`、`/diagnostics/inspect`、`/diagnostics/summary` |
+
+这些请求走 `connection_config.get_base_url()`（server 根地址），不经 proxy。
+
+---
+
+## 3. 创建沙箱 — POST /sandboxes
+
+### 3.1 请求字段
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
@@ -45,9 +85,9 @@
 | `timeout` | int | 存活秒数，最小 60；省略则不自动到期 |
 | `metadata` | map | 标签；`GET /sandboxes?metadata=...` 可过滤 |
 | `extensions.access.renew.extend.seconds` | string | 访问续约秒数，`300`–`86400` |
-| `extensions.opensandbox.extensions.*` | string | 透传为 pod annotation；**不进** task env |
+| `extensions["opensandbox.extensions.*"]` | string | 键以 `opensandbox.extensions.` 开头时，写入 pod annotation（`opensandbox.io/extensions.*`）；**不进** task env |
 
-### 2.2 指定池
+### 3.2 指定池
 
 ```json
 { "extensions": { "poolRef": "my-pool" } }
@@ -56,7 +96,7 @@
 - 具名池不存在 → **404**（非 400）
 - `"*"`：自动分配，跳过池存在性预检
 
-### 2.3 注入环境变量
+### 3.3 注入环境变量
 
 ```json
 {
@@ -68,9 +108,9 @@
 }
 ```
 
-`env` 非空会生成 taskTemplate，并附带 `OPENSANDBOX_ID`。凭证放 `env`，不要放进 `extensions`（extensions 只变 annotation）。
+`env` 非空会生成 taskTemplate；生成时 server 会注入 `OPENSANDBOX_ID`。快路径（§7）不生成 taskTemplate，则无 `OPENSANDBOX_ID`。凭证放 `env`；annotation 透传用 `opensandbox.extensions.*` 前缀键，不要与 `env` 混淆。
 
-### 2.4 启动命令与写文件
+### 3.4 启动命令与写文件
 
 ```json
 { "entrypoint": ["python", "/app/main.py"] }
@@ -93,7 +133,7 @@
 - 池化下会替换池 pod 的 warm entrypoint，在分配后执行
 - 无单独「写文件」API；需要时用上述 shell
 
-### 2.5 到期时间
+### 3.5 到期时间
 
 ```json
 { "timeout": 3600 }
@@ -102,7 +142,7 @@
 - 省略 `timeout`：不自动到期，须显式 `DELETE`
 - 上限受 `server.max_sandbox_timeout_seconds` 约束
 
-### 2.6 访问自动续约
+### 3.6 访问自动续约
 
 ```json
 {
@@ -116,18 +156,18 @@
 
 - 触发条件：请求命中 `/sandboxes/{id}/proxy/{port}`（HTTP/WebSocket）
 - 公式：`new_expires = max(now + extend, current)`
-- 须同时有 `timeout`，且服务端 `[renew_intent] enabled=true`
+- 须创建时设置了 `timeout`（无到期时间的沙箱不会续约）；服务端 TOML 须 `[renew_intent] enabled = true`
 - 不经过 renew API，也不经过 lifecycle 钩子
 
-### 2.7 手动续约 — POST /sandboxes/{id}/renew-expiration
+### 3.7 手动续约 — POST /sandboxes/{id}/renew-expiration
 
 ```json
 { "expiresAt": "2026-08-19T12:00:00Z" }
 ```
 
-`expiresAt` 必须晚于当前时间，且晚于现有到期时间。
+`expiresAt` 须在未来。沙箱创建时未设 `timeout`（手动清理）→ **409**，提示未启用自动到期。
 
-### 2.8 标签
+### 3.8 标签
 
 ```json
 { "metadata": { "tenant": "t1", "app": "chat" } }
@@ -137,7 +177,7 @@
 
 ---
 
-## 3. 查询、删除与访问
+## 4. 查询、删除与访问
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
@@ -148,7 +188,7 @@
 
 若 CR 配置了 `postStop`，删除时由控制器 → task-executor 执行；经 API 创建的沙箱默认无该钩子。
 
-### 3.1 端点
+### 4.1 端点
 
 ```
 GET /sandboxes/{id}/endpoints/8080?use_server_proxy=true
@@ -161,7 +201,7 @@ GET /sandboxes/{id}/endpoints/8080?use_server_proxy=true
 
 `use_server_proxy` 与 `expires` 互斥；同时传 → 400。
 
-### 3.2 Proxy
+### 4.2 Proxy
 
 | 路径 | 说明 |
 |---|---|
@@ -170,7 +210,7 @@ GET /sandboxes/{id}/endpoints/8080?use_server_proxy=true
 
 ---
 
-## 4. 池管理
+## 5. 池管理
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
@@ -180,11 +220,11 @@ GET /sandboxes/{id}/endpoints/8080?use_server_proxy=true
 | `PUT` | `/pools/{name}` | **仅**更新 `capacitySpec` |
 | `DELETE` | `/pools/{name}` | 删除池 |
 
-改 pod 模板：HTTP API 不支持。直接改 Pool CRD `spec.template` 时，控制器重建 **idle** pod，已分配不受影响。
+改 pod 模板：HTTP API 不支持。直接改 Pool CRD `spec.template` 时，控制器重建 **idle** pod，已分配不受影响。详见 `pool-pod-template-cookbook.md` §6。
 
 ---
 
-## 5. 池化 create：忽略与拒绝
+## 6. 池化 create：忽略与拒绝
 
 ### 忽略（不改预热 pod）
 
@@ -211,7 +251,7 @@ GET /sandboxes/{id}/endpoints/8080?use_server_proxy=true
 
 ---
 
-## 6. taskTemplate 生成条件
+## 7. taskTemplate 生成条件
 
 ```text
 needs_task_template =
@@ -220,13 +260,13 @@ needs_task_template =
   or execd_run_as_init
 ```
 
-三项都不满足时走快路径：池 pod 继续 warm entrypoint，`env` / 自定义命令均不生效。
+三项都不满足时走快路径：池 pod 继续 warm entrypoint，`env` / 自定义命令均不生效，且不注入 `OPENSANDBOX_ID`。
 
 若将来 create 支持 lifecycle，有钩子时也必须生成 taskTemplate（见 §1 规划）。
 
 ---
 
-## 7. 示例
+## 8. 示例
 
 **池化沙箱 + 用户 env + 自动续约**
 
