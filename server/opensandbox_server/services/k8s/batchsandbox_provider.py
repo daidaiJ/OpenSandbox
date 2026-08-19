@@ -78,6 +78,7 @@ class BatchSandboxProvider(WorkloadProvider):
             logger.info(f"Using BatchSandbox template file: {template_file_path}")
         self.execd_init_resources = k8s_config.execd_init_resources if k8s_config else None
         self.image_pull_policy = k8s_config.image_pull_policy if k8s_config else "IfNotPresent"
+        self.execd_run_as_init = bool(app_config and app_config.runtime.execd_run_as_init)
 
         self.resolver = SecureRuntimeResolver(app_config) if app_config else None
         self.runtime_class = (
@@ -179,6 +180,9 @@ class BatchSandboxProvider(WorkloadProvider):
         )
         
         main_env = dict(env)
+        main_env["OPENSANDBOX_ID"] = sandbox_id
+        if self.execd_run_as_init:
+            main_env["EXECD_INIT"] = "1"
         if credential_proxy_enabled:
             main_env[OPENSANDBOX_EGRESS_MITMPROXY_TRANSPARENT] = "true"
 
@@ -250,6 +254,7 @@ class BatchSandboxProvider(WorkloadProvider):
             egress_mode=egress_mode,
             credential_proxy_enabled=credential_proxy_enabled,
             extra_env=egress_env,
+            sandbox_id=sandbox_id,
         )
 
         if volumes:
@@ -372,9 +377,23 @@ class BatchSandboxProvider(WorkloadProvider):
             "replicas": 1,
             "poolRef": pool_ref,
         }
-        needs_task_template = env or entrypoint != DEFAULT_ENTRYPOINT
+        needs_task_template = (
+            env
+            or entrypoint != DEFAULT_ENTRYPOINT
+            or self.execd_run_as_init
+        )
         if needs_task_template:
-            spec["taskTemplate"] = self._build_task_template(entrypoint, env)
+            spec["taskTemplate"] = self._build_task_template(entrypoint, env, batchsandbox_name)
+        else:
+            # Fast path: the pre-created pool pod keeps running its own warm
+            # entrypoint, so no per-allocation env can reach execd. The
+            # authoritative BatchSandbox id cannot be injected here; eBPF
+            # audit attribution reports unsupported for this allocation.
+            logger.info(
+                "pool sandbox %s: default allocation without a task template cannot inject "
+                "OPENSANDBOX_ID; eBPF audit sandbox_id attribution is unsupported on this path",
+                batchsandbox_name,
+            )
         if expires_at is not None:
             spec["expireTime"] = expires_at.isoformat()
         runtime_manifest = {
@@ -476,14 +495,31 @@ class BatchSandboxProvider(WorkloadProvider):
         self,
         entrypoint: List[str],
         env: Dict[str, str],
+        sandbox_id: str,
     ) -> Dict[str, Any]:
-        """Build pool taskTemplate with shell-escaped bootstrap command."""
+        """Build pool taskTemplate with shell-escaped bootstrap command.
+
+        With execd_run_as_init enabled, the task is NOT backgrounded: the
+        shim's shell execs bootstrap.sh, which execs `execd --init` (the
+        EXECD_INIT env is injected below), so execd becomes the root of the
+        task process tree. It reaps orphaned task children (subreaper) and
+        propagates the entrypoint exit code back to the shim. Without it,
+        the classic background-and-wait topology is preserved.
+        """
         escaped_entrypoint = ' '.join(shlex.quote(arg) for arg in entrypoint)
-        user_process_cmd = f"/opt/opensandbox/bootstrap.sh {escaped_entrypoint} &"
-        
+        if self.execd_run_as_init:
+            # exec: the task-executor shim's TERM trap signals its direct
+            # child, which must be execd (not an intermediate shell).
+            user_process_cmd = f"exec /opt/opensandbox/bootstrap.sh {escaped_entrypoint}"
+        else:
+            user_process_cmd = f"/opt/opensandbox/bootstrap.sh {escaped_entrypoint} &"
+
         wrapped_command = ["/bin/sh", "-c", user_process_cmd]
 
+        if self.execd_run_as_init:
+            env = {**env, "EXECD_INIT": "1"}
         env_list = [{"name": k, "value": v} for k, v in env.items()] if env else []
+        env_list.append({"name": "OPENSANDBOX_ID", "value": sandbox_id})
 
         return {
             "spec": {
@@ -841,12 +877,18 @@ class BatchSandboxProvider(WorkloadProvider):
             "last_transition_at": creation_timestamp,
         }
     
+    def get_internal_endpoint(
+        self, workload: Dict[str, Any], port: int, sandbox_id: str
+    ) -> Optional[Endpoint]:
+        """Resolve the internal endpoint from the BatchSandbox annotation."""
+        pod_ip = self._parse_pod_ip(workload)
+        if not pod_ip:
+            return None
+        return Endpoint(endpoint=f"{pod_ip}:{port}")
+
     def get_endpoint_info(self, workload: Dict[str, Any], port: int, sandbox_id: str) -> Optional[Endpoint]:
         """Resolve endpoint using gateway ingress or parsed pod IP."""
         if self.ingress_config and self.ingress_config.mode == INGRESS_MODE_GATEWAY:
             return format_ingress_endpoint(self.ingress_config, sandbox_id, port)
 
-        pod_ip = self._parse_pod_ip(workload)
-        if not pod_ip:
-            return None
-        return Endpoint(endpoint=f"{pod_ip}:{port}")
+        return self.get_internal_endpoint(workload, port, sandbox_id)
