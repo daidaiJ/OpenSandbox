@@ -81,6 +81,12 @@ controller:
   # -- Enable leader election for controller manager
   leaderElection:
     enabled: true
+
+  # -- Restrict controller watch/reconcile scope to a single namespace.
+  # When set, the controller only watches BatchSandbox, Pool, Pod, and related
+  # resources in this namespace. Use the same value as the sandbox workload
+  # namespace (e.g. opensandbox) to colocate all sandbox services.
+  watchNamespace: ""
   
   # -- Liveness probe configuration
   livenessProbe:

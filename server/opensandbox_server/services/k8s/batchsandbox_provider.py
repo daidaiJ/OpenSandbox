@@ -31,7 +31,7 @@ from opensandbox_server.config import (
 from opensandbox_server.extensions.keys import BOOTSTRAP_EXECD_ISOLATION_KEY
 from opensandbox_server.services.constants import OPENSANDBOX_EGRESS_MITMPROXY_TRANSPARENT
 from opensandbox_server.services.helpers import format_ingress_endpoint
-from opensandbox_server.api.schema import Endpoint, ImageSpec, NetworkPolicy, PlatformSpec, Volume
+from opensandbox_server.api.schema import Endpoint, ImageSpec, NetworkPolicy, PlatformSpec, TaskProcessLifecycle, Volume
 from opensandbox_server.services.k8s.image_pull_secret_helper import (
     build_image_pull_secret,
     build_image_pull_secret_name,
@@ -123,6 +123,7 @@ class BatchSandboxProvider(WorkloadProvider):
         credential_proxy_enabled: bool = False,
         resource_requests: Optional[Dict[str, str]] = None,
         egress_env: Optional[Dict[str, Optional[str]]] = None,
+        lifecycle: Optional[TaskProcessLifecycle] = None,
     ) -> Dict[str, Any]:
         """Create a BatchSandbox in template mode or pool mode."""
         extensions = extensions or {}
@@ -161,6 +162,7 @@ class BatchSandboxProvider(WorkloadProvider):
                 entrypoint=entrypoint,
                 env=env,
                 annotations=annotations,
+                lifecycle=lifecycle,
             )
 
         extra_volumes, extra_mounts = self._extract_template_pod_extras()
@@ -370,6 +372,7 @@ class BatchSandboxProvider(WorkloadProvider):
         entrypoint: List[str],
         env: Dict[str, str],
         annotations: Optional[Dict[str, str]] = None,
+        lifecycle: Optional[TaskProcessLifecycle] = None,
     ) -> Dict[str, Any]:
         """Create a BatchSandbox by referencing an existing pool."""
         entrypoint = entrypoint or DEFAULT_ENTRYPOINT
@@ -381,9 +384,12 @@ class BatchSandboxProvider(WorkloadProvider):
             env
             or entrypoint != DEFAULT_ENTRYPOINT
             or self.execd_run_as_init
+            or lifecycle is not None
         )
         if needs_task_template:
-            spec["taskTemplate"] = self._build_task_template(entrypoint, env, batchsandbox_name)
+            spec["taskTemplate"] = self._build_task_template(
+                entrypoint, env, batchsandbox_name, lifecycle=lifecycle
+            )
         else:
             # Fast path: the pre-created pool pod keeps running its own warm
             # entrypoint, so no per-allocation env can reach execd. The
@@ -496,6 +502,7 @@ class BatchSandboxProvider(WorkloadProvider):
         entrypoint: List[str],
         env: Dict[str, str],
         sandbox_id: str,
+        lifecycle: Optional[TaskProcessLifecycle] = None,
     ) -> Dict[str, Any]:
         """Build pool taskTemplate with shell-escaped bootstrap command.
 
@@ -521,14 +528,44 @@ class BatchSandboxProvider(WorkloadProvider):
         env_list = [{"name": k, "value": v} for k, v in env.items()] if env else []
         env_list.append({"name": "OPENSANDBOX_ID", "value": sandbox_id})
 
+        process: Dict[str, Any] = {
+            "command": wrapped_command,
+            "env": env_list,
+        }
+        lifecycle_spec = self._build_lifecycle_spec(lifecycle)
+        if lifecycle_spec:
+            process["lifecycle"] = lifecycle_spec
+
         return {
             "spec": {
-                "process": {
-                    "command": wrapped_command,
-                    "env": env_list,
-                }
+                "process": process,
             }
         }
+
+    def _build_lifecycle_spec(
+        self,
+        lifecycle: Optional[TaskProcessLifecycle],
+    ) -> Optional[Dict[str, Any]]:
+        if lifecycle is None:
+            return None
+
+        spec: Dict[str, Any] = {}
+        if lifecycle.pre_start is not None:
+            spec["preStart"] = self._lifecycle_handler_to_dict(lifecycle.pre_start)
+        if lifecycle.post_stop is not None:
+            spec["postStop"] = self._lifecycle_handler_to_dict(lifecycle.post_stop)
+        return spec or None
+
+    @staticmethod
+    def _lifecycle_handler_to_dict(handler) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "exec": {"command": handler.exec.command},
+        }
+        if handler.exec_mode is not None:
+            payload["execMode"] = handler.exec_mode
+        if handler.timeout_seconds is not None:
+            payload["timeoutSeconds"] = handler.timeout_seconds
+        return payload
 
 
     def get_workload(self, sandbox_id: str, namespace: str) -> Optional[Dict[str, Any]]:

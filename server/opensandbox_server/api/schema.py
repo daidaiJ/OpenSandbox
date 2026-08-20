@@ -385,6 +385,57 @@ class SandboxStatus(BaseModel):
 
 
 # ============================================================================
+# Task lifecycle hooks (BatchSandbox taskTemplate)
+# ============================================================================
+
+class TaskExecAction(BaseModel):
+    """Exec command for a task lifecycle hook."""
+
+    command: List[str] = Field(..., min_length=1, description="Command line executed inside the container")
+
+
+class TaskLifecycleHandler(BaseModel):
+    """Lifecycle hook action executed before or after the main task process."""
+
+    exec: TaskExecAction = Field(..., description="Command executed for this hook")
+    exec_mode: Optional[Literal["Local", "Remote"]] = Field(
+        None,
+        alias="execMode",
+        description=(
+            "Where the hook runs. Local: task-executor container (default). "
+            "Remote: main sandbox container via nsenter."
+        ),
+    )
+    timeout_seconds: Optional[int] = Field(
+        None,
+        alias="timeoutSeconds",
+        ge=1,
+        description="Maximum seconds the hook may run before it is killed",
+    )
+
+    class Config:
+        populate_by_name = True
+
+
+class TaskProcessLifecycle(BaseModel):
+    """Lifecycle hooks attached to a BatchSandbox taskTemplate process."""
+
+    pre_start: Optional[TaskLifecycleHandler] = Field(
+        None,
+        alias="preStart",
+        description="Hook executed before the main task process starts",
+    )
+    post_stop: Optional[TaskLifecycleHandler] = Field(
+        None,
+        alias="postStop",
+        description="Hook executed after the main task process stops",
+    )
+
+    class Config:
+        populate_by_name = True
+
+
+# ============================================================================
 # Sandbox Models
 # ============================================================================
 
@@ -490,6 +541,14 @@ class CreateSandboxRequest(BaseModel):
         None,
         description="Opaque container for provider-specific or transient parameters not covered by the core API",
     )
+    lifecycle: Optional[TaskProcessLifecycle] = Field(
+        None,
+        description=(
+            "Optional taskTemplate lifecycle hooks (preStart/postStop). "
+            "Supported on Kubernetes BatchSandbox workloads; requires taskTemplate generation "
+            "(for example when poolRef is set together with entrypoint/env/lifecycle hooks)."
+        ),
+    )
 
     @model_validator(mode="after")
     def validate_source_and_entrypoint(self) -> "CreateSandboxRequest":
@@ -527,6 +586,11 @@ class CreateSandboxRequest(BaseModel):
 
         if self.resource_limits is None:
             raise ValueError("resourceLimits is required when poolRef is not provided.")
+
+        if self.lifecycle is not None and not has_pool_ref:
+            raise ValueError(
+                "lifecycle hooks require extensions.poolRef on BatchSandbox pool allocations."
+            )
 
         return self
 

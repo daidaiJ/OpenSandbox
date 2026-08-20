@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from ..models.network_policy import NetworkPolicy
     from ..models.platform_spec import PlatformSpec
     from ..models.resource_limits import ResourceLimits
+    from ..models.task_process_lifecycle import TaskProcessLifecycle
     from ..models.volume import Volume
 
 
@@ -163,6 +164,7 @@ class CreateSandboxRequest:
                 hours inclusive). Opts the sandbox into OSEP-0009 renew-on-access and sets per-renewal extension seconds. Omit
                 to disable. Invalid values are rejected at creation with HTTP 400 (validated on the lifecycle create endpoint
                 via `validate_extensions` in server `src/extensions/validation.py`).
+            lifecycle (TaskProcessLifecycle | Unset): Lifecycle hooks attached to a BatchSandbox taskTemplate process.
     """
 
     image: ImageSpec | Unset = UNSET
@@ -179,6 +181,7 @@ class CreateSandboxRequest:
     secure_access: bool | Unset = False
     volumes: list[Volume] | Unset = UNSET
     extensions: CreateSandboxRequestExtensions | Unset = UNSET
+    lifecycle: TaskProcessLifecycle | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -239,6 +242,10 @@ class CreateSandboxRequest:
         if not isinstance(self.extensions, Unset):
             extensions = self.extensions.to_dict()
 
+        lifecycle: dict[str, Any] | Unset = UNSET
+        if not isinstance(self.lifecycle, Unset):
+            lifecycle = self.lifecycle.to_dict()
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
@@ -270,6 +277,8 @@ class CreateSandboxRequest:
             field_dict["volumes"] = volumes
         if extensions is not UNSET:
             field_dict["extensions"] = extensions
+        if lifecycle is not UNSET:
+            field_dict["lifecycle"] = lifecycle
 
         return field_dict
 
@@ -283,6 +292,7 @@ class CreateSandboxRequest:
         from ..models.network_policy import NetworkPolicy
         from ..models.platform_spec import PlatformSpec
         from ..models.resource_limits import ResourceLimits
+        from ..models.task_process_lifecycle import TaskProcessLifecycle
         from ..models.volume import Volume
 
         d = dict(src_dict)
@@ -373,6 +383,13 @@ class CreateSandboxRequest:
         else:
             extensions = CreateSandboxRequestExtensions.from_dict(_extensions)
 
+        _lifecycle = d.pop("lifecycle", UNSET)
+        lifecycle: TaskProcessLifecycle | Unset
+        if isinstance(_lifecycle, Unset):
+            lifecycle = UNSET
+        else:
+            lifecycle = TaskProcessLifecycle.from_dict(_lifecycle)
+
         create_sandbox_request = cls(
             image=image,
             snapshot_id=snapshot_id,
@@ -388,6 +405,7 @@ class CreateSandboxRequest:
             secure_access=secure_access,
             volumes=volumes,
             extensions=extensions,
+            lifecycle=lifecycle,
         )
 
         create_sandbox_request.additional_properties = d

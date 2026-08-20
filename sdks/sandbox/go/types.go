@@ -19,6 +19,7 @@ package opensandbox
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -147,6 +148,81 @@ type CredentialProxyConfig struct {
 	Enabled bool `json:"enabled"`
 }
 
+type TaskExecAction struct {
+	Command []string `json:"command"`
+}
+
+// TaskLifecycleExecMode is the hook execution location.
+type TaskLifecycleExecMode string
+
+const (
+	ExecModeLocal  TaskLifecycleExecMode = "Local"
+	ExecModeRemote TaskLifecycleExecMode = "Remote"
+)
+
+func (m TaskLifecycleExecMode) Valid() bool {
+	return m == ExecModeLocal || m == ExecModeRemote
+}
+
+type TaskLifecycleHandler struct {
+	Exec           TaskExecAction        `json:"exec"`
+	ExecMode       TaskLifecycleExecMode `json:"execMode,omitempty"`
+	TimeoutSeconds *int                  `json:"timeoutSeconds,omitempty"`
+}
+
+type TaskProcessLifecycle struct {
+	PreStart *TaskLifecycleHandler `json:"preStart,omitempty"`
+	PostStop *TaskLifecycleHandler `json:"postStop,omitempty"`
+}
+
+func (a TaskExecAction) Validate(field string) error {
+	if len(a.Command) == 0 {
+		return &InvalidArgumentError{Field: field + ".command", Message: "must contain at least one element"}
+	}
+	for i, part := range a.Command {
+		if strings.TrimSpace(part) == "" {
+			return &InvalidArgumentError{
+				Field:   fmt.Sprintf("%s.command[%d]", field, i),
+				Message: "must not be blank",
+			}
+		}
+	}
+	return nil
+}
+
+func (h TaskLifecycleHandler) Validate(field string) error {
+	if err := h.Exec.Validate(field + ".exec"); err != nil {
+		return err
+	}
+	if h.ExecMode != "" && !h.ExecMode.Valid() {
+		return &InvalidArgumentError{Field: field + ".execMode", Message: "must be Local or Remote"}
+	}
+	if h.TimeoutSeconds != nil && *h.TimeoutSeconds < 1 {
+		return &InvalidArgumentError{Field: field + ".timeoutSeconds", Message: "must be >= 1"}
+	}
+	return nil
+}
+
+func (l *TaskProcessLifecycle) Validate() error {
+	if l == nil {
+		return nil
+	}
+	if l.PreStart == nil && l.PostStop == nil {
+		return &InvalidArgumentError{Field: "lifecycle", Message: "at least one of preStart or postStop must be set"}
+	}
+	if l.PreStart != nil {
+		if err := l.PreStart.Validate("lifecycle.preStart"); err != nil {
+			return err
+		}
+	}
+	if l.PostStop != nil {
+		if err := l.PostStop.Validate("lifecycle.postStop"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // CreateSandboxRequest is the request body for creating a new sandbox.
 type CreateSandboxRequest struct {
 	Image            *ImageSpec             `json:"image,omitempty"`
@@ -163,6 +239,7 @@ type CreateSandboxRequest struct {
 	Volumes          []Volume               `json:"volumes,omitempty"`
 	Extensions       map[string]string      `json:"extensions,omitempty"`
 	Platform         *PlatformSpec          `json:"platform,omitempty"`
+	Lifecycle        *TaskProcessLifecycle  `json:"lifecycle,omitempty"`
 }
 
 // SandboxInfo represents a runtime execution environment provisioned from a

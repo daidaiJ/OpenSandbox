@@ -445,6 +445,29 @@ export interface SandboxInfo extends Record<string, unknown> {
   expiresAt: Date | null;
 }
 
+export interface CredentialProxyConfig {
+  enabled?: boolean;
+}
+
+export type TaskLifecycleExecMode = "Local" | "Remote";
+
+export interface TaskExecAction {
+  /** Non-empty argv list executed inside the hook container. */
+  command: readonly [string, ...string[]];
+}
+
+export interface TaskLifecycleHandler {
+  exec: TaskExecAction;
+  execMode?: TaskLifecycleExecMode;
+  /** Maximum seconds the hook may run before it is killed. */
+  timeoutSeconds?: number;
+}
+
+export interface TaskProcessLifecycle {
+  preStart?: TaskLifecycleHandler;
+  postStop?: TaskLifecycleHandler;
+}
+
 export interface CreateSandboxRequest extends Record<string, unknown> {
   image?: ImageSpec;
   snapshotId?: string;
@@ -475,6 +498,7 @@ export interface CreateSandboxRequest extends Record<string, unknown> {
    */
   volumes?: Volume[];
   extensions?: Record<string, unknown>;
+  lifecycle?: TaskProcessLifecycle;
 }
 
 export interface CreateSandboxResponse extends Record<string, unknown> {

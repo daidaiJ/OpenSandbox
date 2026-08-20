@@ -20,7 +20,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 
-from opensandbox_server.api.schema import Endpoint, ImageSpec, NetworkPolicy, PlatformSpec, Volume
+from opensandbox_server.api.schema import Endpoint, ImageSpec, NetworkPolicy, PlatformSpec, TaskProcessLifecycle, Volume
 from opensandbox_server.config import EGRESS_MODE_DNS
 
 
@@ -55,6 +55,7 @@ class WorkloadProvider(ABC):
         credential_proxy_enabled: bool = False,
         resource_requests: Optional[Dict[str, str]] = None,
         egress_env: Optional[Dict[str, Optional[str]]] = None,
+        lifecycle: Optional[TaskProcessLifecycle] = None,
     ) -> Dict[str, Any]:
         """
         Create a new workload resource.

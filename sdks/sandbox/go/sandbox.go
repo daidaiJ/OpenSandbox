@@ -78,6 +78,9 @@ type SandboxCreateOptions struct {
 	// "windows", "arch": "amd64"}). When nil the server applies its default.
 	Platform *PlatformSpec
 
+	// Lifecycle hooks for BatchSandbox pool taskTemplate (requires poolRef).
+	Lifecycle *TaskProcessLifecycle
+
 	// SkipHealthCheck skips the WaitUntilReady call after creation.
 	SkipHealthCheck bool
 
@@ -137,6 +140,12 @@ func CreateSandbox(ctx context.Context, config ConnectionConfig, opts SandboxCre
 	}
 	started := time.Now()
 
+	if opts.Lifecycle != nil {
+		if err := opts.Lifecycle.Validate(); err != nil {
+			return nil, err
+		}
+	}
+
 	req := CreateSandboxRequest{
 		Image:            nil,
 		SnapshotID:       opts.SnapshotID,
@@ -152,6 +161,7 @@ func CreateSandbox(ctx context.Context, config ConnectionConfig, opts SandboxCre
 		Volumes:          opts.Volumes,
 		Extensions:       opts.Extensions,
 		Platform:         opts.Platform,
+		Lifecycle:        opts.Lifecycle,
 	}
 	if opts.Image != "" {
 		req.Image = &ImageSpec{URI: opts.Image, Auth: opts.ImageAuth}

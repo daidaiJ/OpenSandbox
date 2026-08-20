@@ -23,6 +23,7 @@ import {
 } from "./core/constants.js";
 import { ConnectionConfig, type ConnectionConfigOptions } from "./config/connection.js";
 import { reportSandboxCreateMetric } from "./internal/lifecycleMetrics.js";
+import { validateTaskProcessLifecycle } from "./models/lifecycleValidation.js";
 import type { SandboxFiles } from "./services/filesystem.js";
 import type { CredentialVault, Egress } from "./services/egress.js";
 import { createDefaultAdapterFactory } from "./factory/defaultAdapterFactory.js";
@@ -46,6 +47,7 @@ import type {
   SandboxId,
   SandboxInfo,
   SandboxMetadataPatch,
+  TaskProcessLifecycle,
   Volume,
 } from "./models/sandboxes.js";
 import { SandboxReadyTimeoutException } from "./core/exceptions.js";
@@ -175,6 +177,10 @@ export interface SandboxCreateOptions {
    * Optional runtime platform constraint used for provisioning.
    */
   platform?: PlatformSpec;
+  /**
+   * Optional BatchSandbox taskTemplate lifecycle hooks (requires extensions.poolRef).
+   */
+  lifecycle?: TaskProcessLifecycle;
   /**
    * Whether to enable secured access for sandbox endpoints.
    */
@@ -394,6 +400,10 @@ export class Sandbox {
       );
     }
 
+    if (opts.lifecycle != null) {
+      validateTaskProcessLifecycle(opts.lifecycle);
+    }
+
     const req: CreateSandboxRequest = {
       image: opts.image == null ? undefined : toImageSpec(opts.image),
       snapshotId: opts.snapshotId,
@@ -413,6 +423,7 @@ export class Sandbox {
       volumes: opts.volumes,
       extensions: opts.extensions ?? {},
       platform: opts.platform,
+      lifecycle: opts.lifecycle,
     };
     if (timeoutSeconds !== null) {
       req.timeout = timeoutSeconds;

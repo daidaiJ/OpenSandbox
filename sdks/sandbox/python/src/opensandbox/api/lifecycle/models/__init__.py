@@ -56,6 +56,10 @@ from .sandbox_metadata import SandboxMetadata
 from .sandbox_status import SandboxStatus
 from .snapshot import Snapshot
 from .snapshot_status import SnapshotStatus
+from .task_exec_action import TaskExecAction
+from .task_lifecycle_handler import TaskLifecycleHandler
+from .task_lifecycle_handler_exec_mode import TaskLifecycleHandlerExecMode
+from .task_process_lifecycle import TaskProcessLifecycle
 from .volume import Volume
 
 __all__ = (
@@ -99,5 +103,9 @@ __all__ = (
     "SandboxStatus",
     "Snapshot",
     "SnapshotStatus",
+    "TaskExecAction",
+    "TaskLifecycleHandler",
+    "TaskLifecycleHandlerExecMode",
+    "TaskProcessLifecycle",
     "Volume",
 )

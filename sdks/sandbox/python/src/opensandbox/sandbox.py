@@ -47,6 +47,7 @@ from opensandbox.models.sandboxes import (
     SandboxMetrics,
     SandboxRenewResponse,
     SnapshotInfo,
+    TaskProcessLifecycle,
     Volume,
 )
 from opensandbox.services import (
@@ -509,6 +510,7 @@ class Sandbox:
         secure_access: bool = False,
         entrypoint: list[str] | None = None,
         volumes: list[Volume] | None = None,
+        lifecycle: TaskProcessLifecycle | None = None,
         connection_config: ConnectionConfig | None = None,
         health_check: Callable[["Sandbox"], Awaitable[bool]] | None = None,
         health_check_polling_interval: timedelta = timedelta(milliseconds=200),
@@ -587,6 +589,7 @@ class Sandbox:
                 secure_access=secure_access,
                 snapshot_id=snapshot_id,
                 resource_requests=resource_requests,
+                lifecycle=lifecycle,
             )
             sandbox_id = response.id
 

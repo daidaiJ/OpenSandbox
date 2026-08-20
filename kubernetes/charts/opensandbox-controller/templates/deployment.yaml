@@ -93,6 +93,9 @@ spec:
         {{- if .Values.controller.snapshot.resumePullSecret }}
         - --resume-pull-secret={{ .Values.controller.snapshot.resumePullSecret }}
         {{- end }}
+        {{- if .Values.controller.watchNamespace }}
+        - --watch-namespace={{ .Values.controller.watchNamespace }}
+        {{- end }}
         ports:
         - name: health
           containerPort: 8081

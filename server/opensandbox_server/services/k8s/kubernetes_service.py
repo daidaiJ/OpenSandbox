@@ -883,6 +883,7 @@ class KubernetesSandboxService(K8sDiagnosticsMixin, SandboxService, ExtensionSer
                     egress_env=context.egress_env,
                     volumes=request.volumes,
                     platform=request.platform,
+                    lifecycle=request.lifecycle,
                 )
                 workload_left_alive = True
             except ValueError:
@@ -1560,3 +1561,22 @@ class KubernetesSandboxService(K8sDiagnosticsMixin, SandboxService, ExtensionSer
                 },
             )
         return secure
+
+    def exec_in_sandbox_pod(
+        self,
+        sandbox_id: str,
+        request,
+    ):
+        """Internal-only pod exec for BatchSandbox workloads (not exposed via lifecycle API)."""
+        from opensandbox_server.services.k8s.internal_exec import (
+            PodExecRequest,
+            exec_in_sandbox_pod as _exec_in_sandbox_pod,
+        )
+
+        if not isinstance(request, PodExecRequest):
+            request = PodExecRequest(
+                command=list(request.command),
+                container=getattr(request, "container", None),
+                timeout_seconds=getattr(request, "timeout_seconds", None),
+            )
+        return _exec_in_sandbox_pod(self, sandbox_id, request)

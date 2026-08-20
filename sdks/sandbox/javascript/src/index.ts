@@ -73,8 +73,17 @@ export type {
   SandboxId,
   SandboxInfo,
   SandboxMetadataPatch,
+  TaskExecAction,
+  TaskLifecycleHandler,
+  TaskProcessLifecycle,
   Volume,
 } from "./models/sandboxes.js";
+
+export {
+  validateTaskExecAction,
+  validateTaskLifecycleHandler,
+  validateTaskProcessLifecycle,
+} from "./models/lifecycleValidation.js";
 
 export type { Sandboxes } from "./services/sandboxes.js";
 export type { CredentialVault, Egress } from "./services/egress.js";

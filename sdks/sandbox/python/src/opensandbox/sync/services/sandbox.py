@@ -38,6 +38,7 @@ from opensandbox.models.sandboxes import (
     SandboxRenewResponse,
     SnapshotFilter,
     SnapshotInfo,
+    TaskProcessLifecycle,
     Volume,
 )
 
@@ -66,6 +67,7 @@ class SandboxesSync(Protocol):
         snapshot_id: str | None = None,
         credential_proxy: CredentialProxyConfig | None = None,
         resource_requests: dict[str, str] | None = None,
+        lifecycle: TaskProcessLifecycle | None = None,
     ) -> SandboxCreateResponse:
         """
         Create a new sandbox with the specified configuration (blocking).

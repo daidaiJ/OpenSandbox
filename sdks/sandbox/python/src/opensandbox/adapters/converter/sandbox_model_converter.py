@@ -64,6 +64,8 @@ from opensandbox.models.sandboxes import (
     SandboxStatus,
     SnapshotInfo,
     SnapshotStatus,
+    TaskLifecycleHandler,
+    TaskProcessLifecycle,
     Volume,
 )
 
@@ -167,6 +169,54 @@ class SandboxModelConverter:
         )
 
     @staticmethod
+    def to_api_task_lifecycle_handler(
+        handler: TaskLifecycleHandler,
+    ):
+        from opensandbox.api.lifecycle.models.task_exec_action import TaskExecAction
+        from opensandbox.api.lifecycle.models.task_lifecycle_handler import (
+            TaskLifecycleHandler as ApiTaskLifecycleHandler,
+        )
+        from opensandbox.api.lifecycle.models.task_lifecycle_handler_exec_mode import (
+            TaskLifecycleHandlerExecMode,
+        )
+        from opensandbox.api.lifecycle.types import UNSET
+
+        exec_mode = UNSET
+        if handler.exec_mode is not None:
+            exec_mode = TaskLifecycleHandlerExecMode(handler.exec_mode)
+
+        timeout_seconds = UNSET
+        if handler.timeout_seconds is not None:
+            timeout_seconds = handler.timeout_seconds
+
+        return ApiTaskLifecycleHandler(
+            exec_=TaskExecAction(command=handler.exec.command),
+            exec_mode=exec_mode,
+            timeout_seconds=timeout_seconds,
+        )
+
+    @staticmethod
+    def to_api_task_process_lifecycle(lifecycle: TaskProcessLifecycle):
+        from opensandbox.api.lifecycle.models.task_process_lifecycle import (
+            TaskProcessLifecycle as ApiTaskProcessLifecycle,
+        )
+        from opensandbox.api.lifecycle.types import UNSET
+
+        pre_start = UNSET
+        if lifecycle.pre_start is not None:
+            pre_start = SandboxModelConverter.to_api_task_lifecycle_handler(
+                lifecycle.pre_start
+            )
+
+        post_stop = UNSET
+        if lifecycle.post_stop is not None:
+            post_stop = SandboxModelConverter.to_api_task_lifecycle_handler(
+                lifecycle.post_stop
+            )
+
+        return ApiTaskProcessLifecycle(pre_start=pre_start, post_stop=post_stop)
+
+    @staticmethod
     def to_api_create_sandbox_request(
         spec: SandboxImageSpec | None,
         entrypoint: list[str] | None,
@@ -182,6 +232,7 @@ class SandboxModelConverter:
         snapshot_id: str | None = None,
         credential_proxy: CredentialProxyConfig | None = None,
         resource_requests: dict[str, str] | None = None,
+        lifecycle: TaskProcessLifecycle | None = None,
     ) -> CreateSandboxRequest:
         """Convert domain parameters to API CreateSandboxRequest."""
         from opensandbox.api.lifecycle.models.create_sandbox_request import (
@@ -300,6 +351,10 @@ class SandboxModelConverter:
         if resource_requests:
             api_resource_requests = ResourceLimits.from_dict(resource_requests)
 
+        api_lifecycle = UNSET
+        if lifecycle is not None:
+            api_lifecycle = SandboxModelConverter.to_api_task_process_lifecycle(lifecycle)
+
         request = CreateSandboxRequest(
             image=image,
             snapshot_id=snapshot_id if snapshot_id is not None else UNSET,
@@ -314,6 +369,7 @@ class SandboxModelConverter:
             extensions=api_extensions,
             volumes=api_volumes,
             secure_access=secure_access,
+            lifecycle=api_lifecycle,
         )
         if timeout is None:
             # Preserve an explicit manual-cleanup request as JSON null.

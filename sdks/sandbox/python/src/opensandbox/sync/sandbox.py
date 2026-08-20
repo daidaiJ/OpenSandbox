@@ -45,6 +45,7 @@ from opensandbox.models.sandboxes import (
     SandboxMetrics,
     SandboxRenewResponse,
     SnapshotInfo,
+    TaskProcessLifecycle,
     Volume,
 )
 from opensandbox.sync.adapters.factory import AdapterFactorySync
@@ -495,6 +496,7 @@ class SandboxSync:
         secure_access: bool = False,
         entrypoint: list[str] | None = None,
         volumes: list[Volume] | None = None,
+        lifecycle: TaskProcessLifecycle | None = None,
         connection_config: ConnectionConfigSync | None = None,
         health_check: Callable[["SandboxSync"], bool] | None = None,
         health_check_polling_interval: timedelta = timedelta(milliseconds=200),
@@ -574,6 +576,7 @@ class SandboxSync:
                 secure_access=secure_access,
                 snapshot_id=snapshot_id,
                 resource_requests=resource_requests,
+                lifecycle=lifecycle,
             )
             sandbox_id = response.id
             execd_endpoint = sandbox_service.get_sandbox_endpoint(

@@ -33,6 +33,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/certwatcher"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -164,6 +165,11 @@ func main() {
 
 	// Controller concurrency options
 	var concurrencyConfig ConcurrencyConfig
+
+	var watchNamespace string
+	flag.StringVar(&watchNamespace, "watch-namespace", "",
+		"If set, restricts the controller cache to watch and reconcile resources only in this namespace. "+
+			"Use this to colocate sandbox CRDs, Pods, and controller-managed resources in a single namespace.")
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -406,7 +412,7 @@ func main() {
 		config.Burst = kubeClientBurst
 	}
 
-	mgr, err := ctrl.NewManager(config, ctrl.Options{
+	mgrOptions := ctrl.Options{
 		Scheme:                 scheme,
 		Metrics:                metricsServerOptions,
 		WebhookServer:          webhookServer,
@@ -418,7 +424,17 @@ func main() {
 		// for the full LeaseDuration. This is safe because main() exits immediately after
 		// mgr.Start() returns and performs no post-stop cleanup.
 		LeaderElectionReleaseOnCancel: true,
-	})
+	}
+	if watchNamespace != "" {
+		setupLog.Info("Restricting controller watch cache to namespace", "namespace", watchNamespace)
+		mgrOptions.Cache = cache.Options{
+			DefaultNamespaces: map[string]cache.Config{
+				watchNamespace: {},
+			},
+		}
+	}
+
+	mgr, err := ctrl.NewManager(config, mgrOptions)
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)

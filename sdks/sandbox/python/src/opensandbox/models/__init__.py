@@ -85,6 +85,9 @@ from opensandbox.models.sandboxes import (
     SandboxMetrics,
     SandboxState,
     SandboxStatus,
+    TaskExecAction,
+    TaskLifecycleHandler,
+    TaskProcessLifecycle,
     Volume,
 )
 
@@ -148,6 +151,9 @@ __all__ = [
     "SandboxImageAuth",
     "SandboxFilter",
     "SandboxMetrics",
+    "TaskExecAction",
+    "TaskLifecycleHandler",
+    "TaskProcessLifecycle",
     "PagedSandboxInfos",
     "PaginationInfo",
     # Volume models

@@ -87,6 +87,7 @@ kubectl delete crd sandboxsnapshots.sandbox.opensandbox.io
 | `controller.snapshot.imageCommitterPullSecret` | Secret name for pulling the image-committer image in commit Jobs (needed when it's in a private registry) | `""` |
 | `controller.snapshot.resumePullSecret` | Secret name injected into resumed sandboxes for image pulls | `""` |
 | `controller.leaderElection.enabled` | Enable leader election | `true` |
+| `controller.watchNamespace` | Restrict controller watch/reconcile to one namespace (empty = all namespaces) | `""` |
 | `controller.nodeSelector` | Node labels for pod assignment | `{}` |
 | `controller.tolerations` | Tolerations for pod assignment | `[]` |
 | `controller.affinity` | Affinity for pod assignment | `{}` |

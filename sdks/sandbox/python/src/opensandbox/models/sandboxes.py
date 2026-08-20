@@ -159,6 +159,57 @@ class CredentialProxyConfig(BaseModel):
     )
 
 
+class TaskExecAction(BaseModel):
+    """Exec command for a BatchSandbox task lifecycle hook."""
+
+    command: list[str] = Field(..., min_length=1)
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    @field_validator("command")
+    @classmethod
+    def validate_command_parts(cls, value: list[str]) -> list[str]:
+        for index, part in enumerate(value):
+            if not part.strip():
+                msg = f"command[{index}] must not be blank"
+                raise ValueError(msg)
+        return value
+
+
+class TaskLifecycleHandler(BaseModel):
+    """Lifecycle hook action executed before or after the main task process."""
+
+    exec: TaskExecAction
+    exec_mode: Literal["Local", "Remote"] | None = Field(
+        default=None,
+        alias="execMode",
+        description="Hook execution location. Defaults to Local (task-executor container).",
+    )
+    timeout_seconds: int | None = Field(
+        default=None,
+        alias="timeoutSeconds",
+        ge=1,
+    )
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class TaskProcessLifecycle(BaseModel):
+    """Lifecycle hooks attached to a BatchSandbox taskTemplate process."""
+
+    pre_start: TaskLifecycleHandler | None = Field(default=None, alias="preStart")
+    post_stop: TaskLifecycleHandler | None = Field(default=None, alias="postStop")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    @model_validator(mode="after")
+    def validate_at_least_one_hook(self) -> "TaskProcessLifecycle":
+        if self.pre_start is None and self.post_stop is None:
+            msg = "at least one of preStart or postStop must be set"
+            raise ValueError(msg)
+        return self
+
+
 class InlineCredentialSource(BaseModel):
     """
     Write-only inline credential material for Credential Vault.
