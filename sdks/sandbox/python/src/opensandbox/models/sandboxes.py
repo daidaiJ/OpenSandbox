@@ -202,13 +202,6 @@ class TaskProcessLifecycle(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    @model_validator(mode="after")
-    def validate_at_least_one_hook(self) -> "TaskProcessLifecycle":
-        if self.pre_start is None and self.post_stop is None:
-            msg = "at least one of preStart or postStop must be set"
-            raise ValueError(msg)
-        return self
-
 
 class InlineCredentialSource(BaseModel):
     """

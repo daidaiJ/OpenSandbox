@@ -208,7 +208,7 @@ func (l *TaskProcessLifecycle) Validate() error {
 		return nil
 	}
 	if l.PreStart == nil && l.PostStop == nil {
-		return &InvalidArgumentError{Field: "lifecycle", Message: "at least one of preStart or postStop must be set"}
+		return nil
 	}
 	if l.PreStart != nil {
 		if err := l.PreStart.Validate("lifecycle.preStart"); err != nil {

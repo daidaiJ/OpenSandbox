@@ -404,6 +404,12 @@ export class Sandbox {
       validateTaskProcessLifecycle(opts.lifecycle);
     }
 
+    const lifecycle =
+      opts.lifecycle != null &&
+      (opts.lifecycle.preStart != null || opts.lifecycle.postStop != null)
+        ? opts.lifecycle
+        : undefined;
+
     const req: CreateSandboxRequest = {
       image: opts.image == null ? undefined : toImageSpec(opts.image),
       snapshotId: opts.snapshotId,
@@ -423,7 +429,7 @@ export class Sandbox {
       volumes: opts.volumes,
       extensions: opts.extensions ?? {},
       platform: opts.platform,
-      lifecycle: opts.lifecycle,
+      lifecycle,
     };
     if (timeoutSeconds !== null) {
       req.timeout = timeoutSeconds;

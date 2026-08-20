@@ -1567,7 +1567,7 @@ class KubernetesSandboxService(K8sDiagnosticsMixin, SandboxService, ExtensionSer
         sandbox_id: str,
         request,
     ):
-        """Internal-only pod exec for BatchSandbox workloads (not exposed via lifecycle API)."""
+        """Exec a command in the BatchSandbox pod backing this sandbox."""
         from opensandbox_server.services.k8s.internal_exec import (
             PodExecRequest,
             exec_in_sandbox_pod as _exec_in_sandbox_pod,

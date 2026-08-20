@@ -32,6 +32,8 @@ from opensandbox_server.api.schema import (
     CreateSandboxResponse,
     Endpoint,
     ErrorResponse,
+    ExecSandboxRequest,
+    ExecSandboxResponse,
     ListSnapshotsRequest,
     ListSnapshotsResponse,
     ListSandboxesRequest,
@@ -382,6 +384,45 @@ def renew_sandbox_expiration(
     """
     # Delegate to the service layer for expiration updates
     return sandbox_service.renew_expiration(sandbox_id, request)
+
+
+@router.post(
+    "/sandboxes/{sandbox_id}/exec",
+    response_model=ExecSandboxResponse,
+    response_model_exclude_none=True,
+    responses={
+        200: {"description": "Command finished in the sandbox pod"},
+        400: {"model": ErrorResponse, "description": "The request was invalid or malformed"},
+        401: {"model": ErrorResponse, "description": "Authentication credentials are missing or invalid"},
+        403: {"model": ErrorResponse, "description": "The authenticated user lacks permission for this operation"},
+        404: {"model": ErrorResponse, "description": "The requested resource does not exist"},
+        409: {"model": ErrorResponse, "description": "The operation conflicts with the current state"},
+        501: {"model": ErrorResponse, "description": "Pod exec is not supported by this runtime"},
+        502: {"model": ErrorResponse, "description": "The exec stream closed without an exit code"},
+        504: {"model": ErrorResponse, "description": "The command exceeded timeoutSeconds"},
+        500: {"model": ErrorResponse, "description": "An unexpected server error occurred"},
+    },
+)
+def exec_sandbox(
+    sandbox_id: str,
+    request: ExecSandboxRequest,
+    x_request_id: Optional[str] = Header(None, alias="X-Request-ID", description="Unique request identifier for tracing"),
+) -> ExecSandboxResponse:
+    """
+    Exec a command in the pod backing a BatchSandbox.
+
+    Resolves the sandbox id to its allocated Kubernetes pod and runs the command
+    via pods/exec. Intended for other control-plane services; default container
+    is the main sandbox container. Pass container=task-executor to target the sidecar.
+    """
+    result = sandbox_service.exec_in_sandbox_pod(sandbox_id, request)
+    return ExecSandboxResponse(
+        podName=result.pod_name,
+        container=result.container,
+        exitCode=result.exit_code,
+        stdout=result.stdout,
+        stderr=result.stderr,
+    )
 
 
 # ============================================================================

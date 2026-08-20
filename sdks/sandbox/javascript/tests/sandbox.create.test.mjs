@@ -154,6 +154,53 @@ test("Sandbox.create forwards windows platform values", async () => {
   assert.deepEqual(recordedRequests[0].platform, { os: "windows", arch: "amd64" });
 });
 
+test("Sandbox.create forwards lifecycle hooks", async () => {
+  const { adapterFactory, recordedRequests } = createAdapterFactory();
+
+  await Sandbox.create({
+    adapterFactory,
+    connectionConfig: { domain: "http://127.0.0.1:8080" },
+    image: "python:3.12",
+    extensions: { poolRef: "my-pool" },
+    lifecycle: {
+      postStop: {
+        exec: { command: ["/bin/sh", "-c", "echo cleanup"] },
+        execMode: "Local",
+        timeoutSeconds: 30,
+      },
+    },
+    skipHealthCheck: true,
+  });
+
+  assert.equal(recordedRequests.length, 1);
+  assert.deepEqual(recordedRequests[0].lifecycle, {
+    postStop: {
+      exec: { command: ["/bin/sh", "-c", "echo cleanup"] },
+      execMode: "Local",
+      timeoutSeconds: 30,
+    },
+  });
+});
+
+test("Sandbox.create rejects invalid lifecycle payload", async () => {
+  const { adapterFactory } = createAdapterFactory();
+
+  await assert.rejects(
+    Sandbox.create({
+      adapterFactory,
+      connectionConfig: { domain: "http://127.0.0.1:8080" },
+      image: "python:3.12",
+      lifecycle: {
+        postStop: {
+          exec: { command: [" "] },
+        },
+      },
+      skipHealthCheck: true,
+    }),
+    /must not be blank/,
+  );
+});
+
 test("Sandbox.create floors finite timeoutSeconds", async () => {
   const { adapterFactory, recordedRequests } = createAdapterFactory();
 

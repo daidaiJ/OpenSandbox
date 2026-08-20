@@ -683,6 +683,22 @@ class TestCreateSandboxRequestPoolMode:
         errors = exc_info.value.errors()
         assert any("snapshotId" in str(e) and "poolRef" in str(e) for e in errors)
 
+    def test_pool_mode_treats_empty_lifecycle_as_none(self):
+        request = CreateSandboxRequest(
+            extensions={"poolRef": "my-pool"},
+            lifecycle={},
+        )
+        assert request.lifecycle is None
+
+    def test_empty_lifecycle_without_pool_ref_is_ignored(self):
+        request = CreateSandboxRequest(
+            image=ImageSpec(uri="python:3.11"),
+            entrypoint=["python"],
+            resource_limits=ResourceLimits({"cpu": "1", "memory": "512Mi"}),
+            lifecycle={},
+        )
+        assert request.lifecycle is None
+
     def test_pool_mode_parses_credential_proxy_for_service_validation(self):
         """The service returns the documented 400 instead of a parsing-time 422."""
         request = CreateSandboxRequest(

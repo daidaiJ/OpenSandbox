@@ -72,7 +72,7 @@ export function validateTaskProcessLifecycle(
   field = "lifecycle",
 ): void {
   if (lifecycle.preStart == null && lifecycle.postStop == null) {
-    invalidArgument(`${field}: at least one of preStart or postStop must be set`);
+    return;
   }
 
   if (lifecycle.preStart != null) {

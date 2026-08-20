@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Internal-only Kubernetes pod exec helpers for the lifecycle server."""
+"""Kubernetes pod exec used by POST /sandboxes/{sandbox_id}/exec."""
 
 from __future__ import annotations
 
@@ -26,6 +26,8 @@ from opensandbox_server.services.k8s.batchsandbox_provider import BatchSandboxPr
 from opensandbox_server.services.k8s.error_helpers import _build_k8s_api_error, _is_not_found_error
 from opensandbox_server.services.k8s.pod_exec import (
     DEFAULT_EXEC_CONTAINER,
+    PodExecTimeoutError,
+    PodExecUnknownExitCodeError,
     exec_in_pod,
     resolve_batchsandbox_pod_name,
 )
@@ -97,6 +99,22 @@ def exec_in_sandbox_pod(
             container=container,
             timeout_seconds=request.timeout_seconds,
         )
+    except PodExecTimeoutError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail={
+                "code": SandboxErrorCodes.K8S_EXEC_TIMEOUT,
+                "message": str(exc),
+            },
+        ) from exc
+    except PodExecUnknownExitCodeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "code": SandboxErrorCodes.K8S_EXEC_EXIT_UNKNOWN,
+                "message": str(exc),
+            },
+        ) from exc
     except Exception as exc:
         if _is_not_found_error(exc):
             raise HTTPException(
@@ -106,7 +124,7 @@ def exec_in_sandbox_pod(
                     "message": f"Pod '{pod_name}' for sandbox {sandbox_id} was not found.",
                 },
             ) from exc
-        raise _build_k8s_api_error(exc, f"exec in sandbox {sandbox_id}") from exc
+        raise _build_k8s_api_error(f"exec in sandbox {sandbox_id}", exc) from exc
 
     return PodExecResult(
         pod_name=pod_name,

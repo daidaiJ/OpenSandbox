@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Any, Dict, Optional, Tuple
 
 from kubernetes.client import ApiException
@@ -28,7 +29,27 @@ from opensandbox_server.services.k8s.client import K8sClient
 logger = logging.getLogger(__name__)
 
 ALLOC_STATUS_ANNOTATION = "sandbox.opensandbox.io/alloc-status"
-DEFAULT_EXEC_CONTAINER = "task-executor"
+DEFAULT_EXEC_CONTAINER = "sandbox"
+_POLL_INTERVAL_SECONDS = 1.0
+
+
+class PodExecError(Exception):
+    """Base error for Kubernetes pod exec."""
+
+
+class PodExecTimeoutError(PodExecError):
+    """Raised when exec exceeds the requested command timeout."""
+
+    def __init__(self, timeout_seconds: int) -> None:
+        super().__init__(f"Pod exec timed out after {timeout_seconds}s")
+        self.timeout_seconds = timeout_seconds
+
+
+class PodExecUnknownExitCodeError(PodExecError):
+    """Raised when the exec stream closes without a process exit code."""
+
+    def __init__(self, message: str = "Pod exec completed without an exit code") -> None:
+        super().__init__(message)
 
 
 def resolve_batchsandbox_pod_name(
@@ -68,6 +89,13 @@ def resolve_batchsandbox_pod_name(
     return getattr(metadata, "name", None)
 
 
+def _append_stream_output(ws: Any, stdout_chunks: list[str], stderr_chunks: list[str]) -> None:
+    if ws.peek_stdout():
+        stdout_chunks.append(ws.read_stdout() or "")
+    if ws.peek_stderr():
+        stderr_chunks.append(ws.read_stderr() or "")
+
+
 def exec_in_pod(
     k8s_client: K8sClient,
     *,
@@ -98,16 +126,31 @@ def exec_in_pod(
     ws = stream(api.connect_get_namespaced_pod_exec, **exec_kwargs)
     stdout_chunks: list[str] = []
     stderr_chunks: list[str] = []
+    timed_out = False
+    deadline = None if timeout_seconds is None else time.monotonic() + timeout_seconds
 
     try:
         while ws.is_open():
-            ws.update(timeout=timeout_seconds or 1)
-            if ws.peek_stdout():
-                stdout_chunks.append(ws.read_stdout())
-            if ws.peek_stderr():
-                stderr_chunks.append(ws.read_stderr())
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    timed_out = True
+                    break
+                poll = min(_POLL_INTERVAL_SECONDS, remaining)
+            else:
+                poll = _POLL_INTERVAL_SECONDS
+            ws.update(timeout=poll)
+            _append_stream_output(ws, stdout_chunks, stderr_chunks)
+        _append_stream_output(ws, stdout_chunks, stderr_chunks)
     finally:
         ws.close()
 
-    exit_code = ws.returncode if ws.returncode is not None else 0
-    return "".join(stdout_chunks), "".join(stderr_chunks), exit_code
+    if timed_out:
+        raise PodExecTimeoutError(timeout_seconds or 0)
+
+    exit_code = ws.returncode
+    if exit_code is None:
+        raise PodExecUnknownExitCodeError(
+            f"Pod exec in '{pod_name}' closed without a process exit code"
+        )
+    return "".join(stdout_chunks), "".join(stderr_chunks), int(exit_code)

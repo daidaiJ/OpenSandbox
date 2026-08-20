@@ -352,7 +352,9 @@ class SandboxModelConverter:
             api_resource_requests = ResourceLimits.from_dict(resource_requests)
 
         api_lifecycle = UNSET
-        if lifecycle is not None:
+        if lifecycle is not None and (
+            lifecycle.pre_start is not None or lifecycle.post_stop is not None
+        ):
             api_lifecycle = SandboxModelConverter.to_api_task_process_lifecycle(lifecycle)
 
         request = CreateSandboxRequest(

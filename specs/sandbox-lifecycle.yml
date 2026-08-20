@@ -663,6 +663,51 @@ paths:
           $ref: '#/components/responses/Conflict'
         '500':
           $ref: '#/components/responses/InternalServerError'
+  /sandboxes/{sandboxId}/exec:
+    post:
+      tags: [Sandboxes]
+      operationId: execSandbox
+      summary: Exec a command in a BatchSandbox pod
+      description: |
+        Run a command in the Kubernetes pod allocated to this sandbox id
+        (BatchSandbox). Default container is the main `sandbox` container.
+
+        This is a control-plane REST API for other services. It is supported
+        only on Kubernetes BatchSandbox workloads. Missing allocation returns
+        HTTP 409. Command timeout returns HTTP 504.
+      parameters:
+        - $ref: '#/components/parameters/SandboxId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExecSandboxRequest'
+            example:
+              command: ["/bin/sh", "-c", "echo hello"]
+              timeoutSeconds: 30
+      responses:
+        '200':
+          description: Command finished in the sandbox pod
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecSandboxResponse'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestId'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
   /sandboxes/{sandboxId}/endpoints/{port}:
     get:
       tags: [Sandboxes]
@@ -1413,6 +1458,73 @@ components:
 
             **Well-known keys**:
             - `access.renew.extend.seconds` (optional): Decimal integer string from **300** to **86400** (5 minutes to 24 hours inclusive). Opts the sandbox into OSEP-0009 renew-on-access and sets per-renewal extension seconds. Omit to disable. Invalid values are rejected at creation with HTTP 400 (validated on the lifecycle create endpoint via `validate_extensions` in server `src/extensions/validation.py`).
+
+        lifecycle:
+          $ref: '#/components/schemas/TaskProcessLifecycle'
+          description: |
+            Optional BatchSandbox taskTemplate lifecycle hooks. Requires `extensions.poolRef`
+            so the server generates a per-allocation taskTemplate instead of using the pool fast path.
+    TaskProcessLifecycle:
+      type: object
+      description: Lifecycle hooks attached to a BatchSandbox taskTemplate process.
+      properties:
+        preStart:
+          $ref: '#/components/schemas/TaskLifecycleHandler'
+        postStop:
+          $ref: '#/components/schemas/TaskLifecycleHandler'
+    ExecSandboxRequest:
+      type: object
+      required: [command]
+      properties:
+        command:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        container:
+          type: string
+          description: Container name. Defaults to the main sandbox container.
+        timeoutSeconds:
+          type: integer
+          minimum: 1
+          description: Maximum seconds the command may run before the exec stream is closed.
+    ExecSandboxResponse:
+      type: object
+      required: [podName, container, exitCode]
+      properties:
+        podName:
+          type: string
+        container:
+          type: string
+        exitCode:
+          type: integer
+        stdout:
+          type: string
+        stderr:
+          type: string
+    TaskLifecycleHandler:
+      type: object
+      required: [exec]
+      properties:
+        exec:
+          $ref: '#/components/schemas/TaskExecAction'
+        execMode:
+          type: string
+          enum: [Local, Remote]
+          description: Hook execution location. Defaults to Local (task-executor container).
+        timeoutSeconds:
+          type: integer
+          minimum: 1
+          description: Maximum seconds the hook may run before it is killed.
+    TaskExecAction:
+      type: object
+      required: [command]
+      properties:
+        command:
+          type: array
+          minItems: 1
+          items:
+            type: string
     ResourceLimits:
       type: object
       description: |

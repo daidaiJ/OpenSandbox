@@ -380,11 +380,14 @@ class BatchSandboxProvider(WorkloadProvider):
             "replicas": 1,
             "poolRef": pool_ref,
         }
+        has_lifecycle_hooks = lifecycle is not None and (
+            lifecycle.pre_start is not None or lifecycle.post_stop is not None
+        )
         needs_task_template = (
             env
             or entrypoint != DEFAULT_ENTRYPOINT
             or self.execd_run_as_init
-            or lifecycle is not None
+            or has_lifecycle_hooks
         )
         if needs_task_template:
             spec["taskTemplate"] = self._build_task_template(

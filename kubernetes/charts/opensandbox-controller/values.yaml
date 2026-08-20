@@ -83,9 +83,12 @@ controller:
     enabled: true
 
   # -- Restrict controller watch/reconcile scope to a single namespace.
-  # When set, the controller only watches BatchSandbox, Pool, Pod, and related
-  # resources in this namespace. Use the same value as the sandbox workload
-  # namespace (e.g. opensandbox) to colocate all sandbox services.
+  # This does NOT create sandboxes; the lifecycle server still creates CRs in
+  # `[kubernetes].namespace` (Helm: opensandbox-server values `configToml`).
+  # Set this to that same workload namespace (e.g. opensandbox) so the
+  # controller actually reconciles the CRs the server creates. Empty = all
+  # namespaces. Controller deployment namespace (opensandbox-system) can stay
+  # separate from the workload namespace.
   watchNamespace: ""
   
   # -- Liveness probe configuration

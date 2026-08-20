@@ -31,6 +31,9 @@ from opensandbox.models.sandboxes import (
     SandboxFilter,
     SandboxImageSpec,
     SnapshotFilter,
+    TaskExecAction,
+    TaskLifecycleHandler,
+    TaskProcessLifecycle,
 )
 from opensandbox.sync.adapters.sandboxes_adapter import (
     SandboxesAdapterSync as SyncSandboxesAdapter,
@@ -162,6 +165,54 @@ async def test_create_sandbox_success(monkeypatch: pytest.MonkeyPatch) -> None:
     network_policy = called["body"].to_dict()["networkPolicy"]
     assert network_policy["defaultAction"] == "deny"
     assert network_policy["egress"] == [{"action": "allow", "target": "pypi.org"}]
+
+
+@pytest.mark.asyncio
+async def test_create_sandbox_forwards_lifecycle_hooks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called = {}
+
+    async def _fake_asyncio_detailed(*, client, body):
+        called["body"] = body
+        return _Resp(status_code=200, parsed=_api_create_sandbox_response(str(uuid4())))
+
+    monkeypatch.setattr(
+        "opensandbox.api.lifecycle.api.sandboxes.post_sandboxes.asyncio_detailed",
+        _fake_asyncio_detailed,
+    )
+
+    adapter = SandboxesAdapter(ConnectionConfig(domain="example.com:8080", api_key="k"))
+    lifecycle = TaskProcessLifecycle(
+        post_stop=TaskLifecycleHandler(
+            exec=TaskExecAction(command=["/bin/sh", "-c", "echo cleanup"]),
+            exec_mode="Local",
+            timeout_seconds=30,
+        ),
+    )
+
+    await adapter.create_sandbox(
+        spec=SandboxImageSpec("python:3.11"),
+        entrypoint=["/bin/sh"],
+        env={},
+        metadata={},
+        timeout=timedelta(seconds=3),
+        resource={"cpu": "100m"},
+        platform=None,
+        network_policy=None,
+        extensions={"poolRef": "my-pool"},
+        volumes=None,
+        lifecycle=lifecycle,
+    )
+
+    dumped = called["body"].to_dict()
+    assert dumped["lifecycle"]["postStop"]["exec"]["command"] == [
+        "/bin/sh",
+        "-c",
+        "echo cleanup",
+    ]
+    assert dumped["lifecycle"]["postStop"]["execMode"] == "Local"
+    assert dumped["lifecycle"]["postStop"]["timeoutSeconds"] == 30
 
 
 @pytest.mark.asyncio

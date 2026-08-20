@@ -216,6 +216,19 @@ class SandboxService(ABC):
         """Patch sandbox metadata via JSON Merge Patch (RFC 7396). Non-null adds/replaces, null deletes, absent keeps."""
         pass
 
+    def exec_in_sandbox_pod(self, sandbox_id: str, request) -> object:
+        """Exec a command in the pod backing a sandbox. Kubernetes BatchSandbox only."""
+        from fastapi import HTTPException, status
+        from opensandbox_server.services.constants import SandboxErrorCodes
+
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail={
+                "code": SandboxErrorCodes.K8S_EXEC_NOT_SUPPORTED,
+                "message": "Pod exec is supported only for Kubernetes BatchSandbox workloads.",
+            },
+        )
+
     @staticmethod
     def _is_system_label(key: str) -> bool:
         return key.startswith("opensandbox.io/")

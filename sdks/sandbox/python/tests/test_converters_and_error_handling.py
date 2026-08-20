@@ -101,10 +101,10 @@ def test_handle_api_error_maps_runtime_lost_and_replaced() -> None:
     """409 RUNTIME_LOST / RUNTIME_REPLACED surface as SandboxApiException with codes."""
     from opensandbox.exceptions import SandboxApiException
 
-    for code in ("SANDBOX::RUNTIME_LOST", "SANDBOX::RUNTIME_REPLACED"):
+    for error_code in ("SANDBOX::RUNTIME_LOST", "SANDBOX::RUNTIME_REPLACED"):
 
         class Parsed:
-            code = code
+            code = error_code
             message = "runtime identity changed"
 
         class Resp:
@@ -115,7 +115,7 @@ def test_handle_api_error_maps_runtime_lost_and_replaced() -> None:
         with pytest.raises(SandboxApiException) as ei:
             handle_api_error(Resp(), "ProxyOp")
         assert ei.value.status_code == 409
-        assert ei.value.error.code == code
+        assert ei.value.error.code == error_code
         assert ei.value.is_retryable is False
 
 
@@ -701,3 +701,56 @@ def test_sandbox_model_converter_supports_windows_platform_request() -> None:
     )
     dumped = req.to_dict()
     assert dumped["platform"] == {"os": "windows", "arch": "amd64"}
+
+
+def test_task_process_lifecycle_empty_is_omitted() -> None:
+    from opensandbox.models.sandboxes import TaskProcessLifecycle
+
+    lifecycle = TaskProcessLifecycle()
+    req = SandboxModelConverter.to_api_create_sandbox_request(
+        spec=None,
+        entrypoint=None,
+        env={},
+        metadata={},
+        timeout=None,
+        resource={},
+        platform=None,
+        network_policy=None,
+        extensions={"poolRef": "my-pool"},
+        volumes=None,
+        lifecycle=lifecycle,
+    )
+    dumped = req.to_dict()
+    assert "lifecycle" not in dumped
+
+
+def test_task_process_lifecycle_converter_maps_post_stop() -> None:
+    from opensandbox.models.sandboxes import (
+        TaskExecAction,
+        TaskLifecycleHandler,
+        TaskProcessLifecycle,
+    )
+
+    lifecycle = TaskProcessLifecycle(
+        post_stop=TaskLifecycleHandler(
+            exec=TaskExecAction(command=["/bin/sh", "-c", "echo cleanup"]),
+            exec_mode="Local",
+            timeout_seconds=30,
+        ),
+    )
+
+    api_lifecycle = SandboxModelConverter.to_api_task_process_lifecycle(lifecycle)
+    dumped = api_lifecycle.to_dict()
+
+    assert dumped["postStop"]["exec"]["command"] == ["/bin/sh", "-c", "echo cleanup"]
+    assert dumped["postStop"]["execMode"] == "Local"
+    assert dumped["postStop"]["timeoutSeconds"] == 30
+
+
+def test_task_exec_action_rejects_blank_command_part() -> None:
+    from pydantic import ValidationError
+
+    from opensandbox.models.sandboxes import TaskExecAction
+
+    with pytest.raises(ValidationError):
+        TaskExecAction(command=[" "])

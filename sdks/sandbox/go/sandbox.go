@@ -140,6 +140,9 @@ func CreateSandbox(ctx context.Context, config ConnectionConfig, opts SandboxCre
 	}
 	started := time.Now()
 
+	if opts.Lifecycle != nil && opts.Lifecycle.PreStart == nil && opts.Lifecycle.PostStop == nil {
+		opts.Lifecycle = nil
+	}
 	if opts.Lifecycle != nil {
 		if err := opts.Lifecycle.Validate(); err != nil {
 			return nil, err

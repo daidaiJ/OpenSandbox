@@ -435,6 +435,38 @@ class TaskProcessLifecycle(BaseModel):
         populate_by_name = True
 
 
+class ExecSandboxRequest(BaseModel):
+    """Request to exec a command in the pod backing a BatchSandbox."""
+
+    command: List[str] = Field(..., min_length=1, description="Command line executed inside the container")
+    container: Optional[str] = Field(
+        None,
+        description="Container name. Defaults to the main sandbox container (not task-executor).",
+    )
+    timeout_seconds: Optional[int] = Field(
+        None,
+        alias="timeoutSeconds",
+        ge=1,
+        description="Maximum seconds the command may run before the exec stream is closed",
+    )
+
+    class Config:
+        populate_by_name = True
+
+
+class ExecSandboxResponse(BaseModel):
+    """Result of exec in a BatchSandbox pod."""
+
+    pod_name: str = Field(..., alias="podName", description="Resolved pod name")
+    container: str = Field(..., description="Container that ran the command")
+    exit_code: int = Field(..., alias="exitCode", description="Process exit code")
+    stdout: str = Field("", description="Captured stdout")
+    stderr: str = Field("", description="Captured stderr")
+
+    class Config:
+        populate_by_name = True
+
+
 # ============================================================================
 # Sandbox Models
 # ============================================================================
@@ -552,6 +584,13 @@ class CreateSandboxRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_source_and_entrypoint(self) -> "CreateSandboxRequest":
+        if (
+            self.lifecycle is not None
+            and self.lifecycle.pre_start is None
+            and self.lifecycle.post_stop is None
+        ):
+            self.lifecycle = None
+
         # When poolRef is set, image/snapshotId/entrypoint/resourceLimits are
         # all defined in the Pool CRD and not required from the caller.
         has_pool_ref = bool((self.extensions or {}).get("poolRef", "").strip())

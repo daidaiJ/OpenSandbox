@@ -138,7 +138,7 @@ Versioning note:
 
 **Gateway**: When `server.gateway.enabled=true`, the chart writes `[ingress] mode = "gateway"` in config.toml and deploys **components/ingress** Deployment/Service/RBAC; gateway `--mode` matches config. External access must be configured separately.
 
-Set `[kubernetes].namespace` in config for the sandbox workload namespace and create that namespace before submitting workloads. Configure `OPENSANDBOX_SERVER_API_KEY` from a Secret in production. The container and `ClusterIP` Service use port `80`; keep `[server].port = 80` when replacing `configToml`.
+Set `[kubernetes].namespace` in config for the sandbox workload namespace and create that namespace before submitting workloads. If the controller is started with `--watch-namespace` / `controller.watchNamespace`, that value **must be the same workload namespace**; otherwise CRs are created where the server is configured and never reconciled. Configure `OPENSANDBOX_SERVER_API_KEY` from a Secret in production. The container and `ClusterIP` Service use port `80`; keep `[server].port = 80` when replacing `configToml`.
 
 ## Upgrade and uninstall
 

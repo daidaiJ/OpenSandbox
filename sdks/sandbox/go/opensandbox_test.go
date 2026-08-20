@@ -105,6 +105,48 @@ func TestCreateSandbox(t *testing.T) {
 	}
 }
 
+func TestCreateSandbox_Lifecycle(t *testing.T) {
+	_, client := newLifecycleServer(t, func(w http.ResponseWriter, r *http.Request) {
+		var req CreateSandboxRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			assert.Fail(t, err.Error())
+		}
+		if req.Lifecycle == nil || req.Lifecycle.PostStop == nil {
+			assert.Fail(t, "expected lifecycle.postStop")
+		}
+		if len(req.Lifecycle.PostStop.Exec.Command) != 2 || req.Lifecycle.PostStop.Exec.Command[0] != "echo" {
+			assert.Fail(t, fmt.Sprintf("unexpected lifecycle command: %+v", req.Lifecycle.PostStop.Exec))
+		}
+		if req.Lifecycle.PostStop.ExecMode != ExecModeLocal {
+			assert.Fail(t, fmt.Sprintf("ExecMode = %q, want %q", req.Lifecycle.PostStop.ExecMode, ExecModeLocal))
+		}
+		if req.Lifecycle.PostStop.TimeoutSeconds == nil || *req.Lifecycle.PostStop.TimeoutSeconds != 30 {
+			assert.Fail(t, fmt.Sprintf("TimeoutSeconds = %+v, want 30", req.Lifecycle.PostStop.TimeoutSeconds))
+		}
+
+		jsonResponse(w, http.StatusCreated, SandboxInfo{
+			ID: "sbx-lifecycle",
+			Status: SandboxStatus{State: StatePending},
+			CreatedAt: time.Now().UTC().Truncate(time.Second),
+		})
+	})
+
+	timeout := 30
+	_, err := client.CreateSandbox(context.Background(), CreateSandboxRequest{
+		Image: &ImageSpec{URI: "python:3.12"},
+		ResourceLimits: ResourceLimits{"cpu": "500m"},
+		Extensions: map[string]string{"poolRef": "my-pool"},
+		Lifecycle: &TaskProcessLifecycle{
+			PostStop: &TaskLifecycleHandler{
+				Exec:           TaskExecAction{Command: []string{"echo", "cleanup"}},
+				ExecMode:       ExecModeLocal,
+				TimeoutSeconds: &timeout,
+			},
+		},
+	})
+	require.NoErrorf(t, err, "CreateSandbox with lifecycle")
+}
+
 func TestCreateSandbox_ImageAuth(t *testing.T) {
 	_, client := newLifecycleServer(t, func(w http.ResponseWriter, r *http.Request) {
 		var req CreateSandboxRequest
