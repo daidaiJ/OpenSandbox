@@ -25,6 +25,7 @@
 | [创建沙箱参数说明书（池化模式）](opensandbox-create-sandbox-params-reference.md) | 池化模式参数（生效/忽略/拒绝）、extensions 编解码、OSEP-0009 续约 | 2026-08-19 |
 | [沙箱管理高阶 API 与参数参考（快速检索）](opensandbox-sandbox-management-api-reference.md) | 按业务能力查 API/参数：创建/注入/续约/查询/池管理 | 2026-08-19 |
 | [示例：动态传递用户信息给 task 模板](opensandbox-task-template-user-info-injection-example.md) | user_id + user_auth_token 经 taskTemplate 注入沙箱（env / 文件两种方式） | 2026-08-19 |
+| [池化模式出向管控与 Higress 分层架构](opensandbox-egress-pool-higress-architecture.md) | 定向阻断、特定服务（内外）放行、平台组件/业务运行时隔离、Higress L7 分层、NodePort 场景 | 2026-08-21 |
 
 ## 方案设计
 
@@ -41,6 +42,7 @@
 | 文档 | 主题 |
 |---|---|
 | [沙箱配置参数与环境变量参考（全链路）](opensandbox-sandbox-config-and-env-reference.md) | server 配置 → pod/容器 env 注入 → execd / task-executor / egress / Jupyter |
+| [Egress 实现细节进阶参考（附录）](opensandbox-egress-internals-reference.md) | egress 内部机制：TTL、iptables/nft、HTTP API 细节、环境变量全集（主文档引用，非业务必读） |
 
 ## 关联关系速览
 
@@ -53,4 +55,7 @@ crd-controller-reconcile-analysis ──┬── controller-defects-and-pitfall
 openclaw-integration-analysis ──┬── openclaw-tool-plugin-design ──┬── openclaw-plugin-selfdeployed-server
                                 └── open-issues-risk-review-no-pause-resume
 openclaw-tool-plugin-design ──┴── execd-directory-listing-limits
+egress-network-policy ──┬── k8s-networkpolicy-vs-egress-sidecar
+                        └── egress-pool-higress-architecture ──┬── egress-internals-reference（附录）
+                                                                └── exporter/egress-network-policy-cookbook（落地）
 ```
