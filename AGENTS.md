@@ -16,6 +16,31 @@ Use this file as the root router for the monorepo. Prefer the nearest `AGENTS.md
 - `tests/`: cross-language end-to-end SDK tests
 - `docs/`, `examples/`, `sandboxes/`, `oseps/`: documentation, samples, images/environments, and proposals
 
+## Business Context
+
+This repository is the sandbox execution engine for an **internal agent service at a large enterprise**. Business context and constraints that shape all downstream work:
+
+- **Scenario**: multi-department/multi-team agents running on an **intranet K8s cluster**; workloads are mostly short-task Q&A/assist, with a minority of long-session interactions.
+- **Hard constraints**:
+  - **Limited node resources** (CPU/memory) — no unlimited cloud capacity; serving **more users beats session duration**; service quality and stability outrank density.
+  - **Tenant control lives in the business layer** (user → department → namespace mapping, quotas, audit), **not** in the server `[tenants]` feature. Namespaces are **approval-gated resources**: static, controlled, few.
+  - Intranet/offline deployment (private registry, no public network dependency); sensitive enterprise data requires strong isolation + audit.
+- **Architecture decisions**:
+  - OpenSandbox server is treated as a **stateless execution engine**: one server instance per approved department namespace (or a single instance with `[tenants]` mapping when departments are many). The business layer owns auth, per-user quota accounting, orchestration, artifact management, and audit.
+  - **Pooled mode is the main path** (Pool + BatchSandbox + taskTemplate); ephemeral "use-and-burn" pattern with short TTL; **no pause/resume/snapshot** for task workloads (rebuild beats snapshot).
+  - **Artifacts go through the S3 middleware** (silent restore/write-back per user directory) because pooled mode cannot attach per-sandbox volumes; shared read-only data (models/datasets) is statically pre-mounted in the Pool template.
+  - Egress sidecar is avoided on the pooled path (K8s NetworkPolicy instead) to save per-sandbox memory; user info is injected via `taskTemplate` env at allocation time.
+- **Key reference docs** (read before touching related areas):
+  - `wiki/opensandbox-business-context.md` — **authoritative business context & decision log** (scenario, constraints, architecture decisions D-1~D-10, change history). Business memory documents live under `wiki/`; update this file first when business context changes, then sync `AGENTS.md` and `exporter/README.md`.
+  - `wiki/opensandbox-ephemeral-sandbox-orchestration-pattern.md` — use-and-burn orchestration
+  - `wiki/opensandbox-pooled-session-s3-sync-middleware.md` + `changes/pooled-session-s3-sync.md` — S3 artifact middleware (implemented)
+  - `wiki/opensandbox-shardtaskpatches-mechanism-and-examples.md` — heterogeneous task dispatch
+  - `wiki/opensandbox-task-template-user-info-injection-example.md` — user info injection
+  - `wiki/opensandbox-k8s-networkpolicy-vs-egress-sidecar.md` — network isolation choice
+  - `wiki/opensandbox-shared-storage-interpreter-minimal-image.md` — image slimming
+  - `changes/954-runtime-perception-proxy.md` — silent rebuild perception (implemented)
+  - Platform selection comparison (OpenSandbox vs CubeSandbox) lives in the `agent-teams-docs` repo (`opensandbox-vs-cubesandbox-selection.md`).
+
 ## Routing
 
 - For `server/**`, or lifecycle server behavior, sandbox creation flow, or user-visible server config, read `server/AGENTS.md`.
@@ -34,6 +59,7 @@ Use this file as the root router for the monorepo. Prefer the nearest `AGENTS.md
 - Simplicity first: implement the smallest solution that satisfies the request; avoid speculative features, one-off abstractions, and unnecessary configurability.
 - Surgical changes: touch only files and lines needed for the task, match local style, and do not refactor or delete unrelated pre-existing code.
 - Goal-driven execution: translate non-trivial work into verifiable success criteria, add or update focused tests when behavior changes, and loop until checks pass or blockers are clear.
+- Parallel execution: run tools and subagents in parallel whenever they have no ordering dependency; keep long-running commands in the background instead of blocking on them; never duplicate work already delegated to a subagent.
 
 ## Branching
 
