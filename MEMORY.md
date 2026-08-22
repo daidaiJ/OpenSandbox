@@ -2,7 +2,7 @@
 
 > 本文档是 OpenSandbox 下游业务的**权威背景记忆**，供 agent 与开发者快速恢复业务上下文。
 > 维护规则：业务背景/约束/架构决策变化时，先更新本文档，再同步 `AGENTS.md` 的 Business Context 与 `exporter/README.md` 背景描述。
-> 关联：`../AGENTS.md`（Business Context 摘要）、`README.md`（wiki 索引）、`../changes/README.md`（已实施改动）
+> 关联：`AGENTS.md`（Business Context 摘要）、`wiki/README.md`（调研/方案索引）、`changes/README.md`（已实施改动）
 
 ---
 
@@ -57,7 +57,7 @@
 | 网络隔离选型 | `wiki/opensandbox-k8s-networkpolicy-vs-egress-sidecar.md` |
 | 镜像瘦身 | `wiki/opensandbox-shared-storage-interpreter-minimal-image.md` |
 | 静默重建感知 | `changes/954-runtime-perception-proxy.md`（已实施） |
-| 实操 Cookbook | `../exporter/README.md` |
+| 实操 Cookbook | `exporter/README.md` |
 
 ## 6. 变更记录
 

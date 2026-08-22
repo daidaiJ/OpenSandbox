@@ -14,7 +14,7 @@
 - **去 egress sidecar**：用 K8s NetworkPolicy 省内存；共享只读数据静态预置 Pool 模板
 - **任务型负载不走 pause/resume/快照**：重建优于快照
 
-> 完整背景、决策理由与变更记录见 [业务背景与决策记忆](../wiki/opensandbox-business-context.md)（权威文档，存于 `wiki/`）；摘要见仓库根 `AGENTS.md` 的 Business Context。
+> 完整背景、决策理由与变更记录见仓库根 [MEMORY.md](../MEMORY.md)（权威业务记忆文档）；摘要见仓库根 `AGENTS.md` 的 Business Context。
 
 ## Cookbook 列表
 

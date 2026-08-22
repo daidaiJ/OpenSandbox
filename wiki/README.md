@@ -27,7 +27,6 @@
 | [示例：动态传递用户信息给 task 模板](opensandbox-task-template-user-info-injection-example.md) | user_id + user_auth_token 经 taskTemplate 注入沙箱（env / 文件两种方式） | 2026-08-19 |
 | [池化模式出向管控与 Higress 分层架构](opensandbox-egress-pool-higress-architecture.md) | 定向阻断、特定服务（内外）放行、平台组件/业务运行时隔离、Higress L7 分层、NodePort 场景 | 2026-08-21 |
 | [shardTaskPatches 机制详解与示例](opensandbox-shardtaskpatches-mechanism-and-examples.md) | 异构任务分发机制（strategic merge patch、下标对齐）、适用场景、完整示例与坑 | 2026-08-22 |
-| [业务背景与决策记忆](opensandbox-business-context.md) | 业务场景、硬约束、架构决策 D-1~D-10、平台选型结论、变更记录（权威背景文档） | 2026-08-22 |
 
 ## 方案设计
 
@@ -56,8 +55,6 @@ crd-controller-reconcile-analysis ──┬── controller-defects-and-pitfall
                                         └── pool-template-update-and-allocation
 batchsandbox-task-3s-polling-exploration ──┬── shardtaskpatches-mechanism-and-examples
                                            └── task-template-user-info-injection-example
-business-context（权威背景）──┬── 全部调研/方案文档（约束与决策的出处）
-                             └── ../exporter/README.md（背景摘要）
 openclaw-integration-analysis ──┬── openclaw-tool-plugin-design ──┬── openclaw-plugin-selfdeployed-server
                                 └── open-issues-risk-review-no-pause-resume
 openclaw-tool-plugin-design ──┴── execd-directory-listing-limits

@@ -31,7 +31,7 @@ This repository is the sandbox execution engine for an **internal agent service 
   - **Artifacts go through the S3 middleware** (silent restore/write-back per user directory) because pooled mode cannot attach per-sandbox volumes; shared read-only data (models/datasets) is statically pre-mounted in the Pool template.
   - Egress sidecar is avoided on the pooled path (K8s NetworkPolicy instead) to save per-sandbox memory; user info is injected via `taskTemplate` env at allocation time.
 - **Key reference docs** (read before touching related areas):
-  - `wiki/opensandbox-business-context.md` — **authoritative business context & decision log** (scenario, constraints, architecture decisions D-1~D-10, change history). Business memory documents live under `wiki/`; update this file first when business context changes, then sync `AGENTS.md` and `exporter/README.md`.
+  - `MEMORY.md` — **authoritative business context & decision log** (scenario, constraints, architecture decisions D-1~D-10, change history). Business memory lives in `MEMORY.md` at the repo root; update it first when business context changes, then sync `AGENTS.md` and `exporter/README.md`.
   - `wiki/opensandbox-ephemeral-sandbox-orchestration-pattern.md` — use-and-burn orchestration
   - `wiki/opensandbox-pooled-session-s3-sync-middleware.md` + `changes/pooled-session-s3-sync.md` — S3 artifact middleware (implemented)
   - `wiki/opensandbox-shardtaskpatches-mechanism-and-examples.md` — heterogeneous task dispatch
