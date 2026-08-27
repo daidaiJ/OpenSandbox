@@ -27,6 +27,9 @@
 | [示例：动态传递用户信息给 task 模板](opensandbox-task-template-user-info-injection-example.md) | user_id + user_auth_token 经 taskTemplate 注入沙箱（env / 文件两种方式） | 2026-08-19 |
 | [池化模式出向管控与 Higress 分层架构](opensandbox-egress-pool-higress-architecture.md) | 定向阻断、特定服务（内外）放行、平台组件/业务运行时隔离、Higress L7 分层、NodePort 场景 | 2026-08-21 |
 | [shardTaskPatches 机制详解与示例](opensandbox-shardtaskpatches-mechanism-and-examples.md) | 异构任务分发机制（strategic merge patch、下标对齐）、适用场景、完整示例与坑 | 2026-08-22 |
+| [沙箱控制器多副本部署与调优参数调研](opensandbox-controller-multi-replica-tuning.md) | leader election 多副本 HA、concurrency/qps/burst 等调优参数清单 | 2026-08-27 |
+| [Pool 容量四参数（poolMin/poolMax/bufferMin/bufferMax）调研](opensandbox-pool-capacity-params.md) | 池模式容量参数定义、滞回伸缩算法、调参要点与边界 | 2026-08-27 |
+| [Pool 池模式扩缩容机理与延迟计算（运维手册）](opensandbox-pool-scaling-mechanism-ops.md) | 事件驱动机理、分配/扩容/缩容延迟公式与示例、参数范围表、观测与排查 | 2026-08-27 |
 
 ## 方案设计
 
