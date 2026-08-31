@@ -30,7 +30,6 @@ from opensandbox_server.config import (
     AppConfig,
     EGRESS_MODE_DNS,
     EGRESS_MODE_DNS_NFT,
-    EgressConfig,
     ExecdInitResources,
     KubernetesRuntimeConfig,
     RuntimeConfig,
@@ -43,8 +42,13 @@ from opensandbox_server.services.constants import (
     SANDBOX_EGRESS_AUTH_TOKEN_METADATA_KEY,
 )
 from opensandbox_server.services.k8s.batchsandbox_provider import BatchSandboxProvider
+from opensandbox_server.services.k8s.workload_provider import EgressWorkloadSettings
 from opensandbox_server.services.constants import OPENSANDBOX_EGRESS_TOKEN
 from opensandbox_server.services.k8s.image_pull_secret_helper import IMAGE_AUTH_SECRET_PREFIX
+from opensandbox_server.services.k8s.status_helpers import (
+    POOL_CAPACITY_EXHAUSTED_REASON,
+    _is_pool_capacity_exhausted_status,
+)
 from opensandbox_server.services.k8s.volume_helper import apply_volumes_to_pod_spec
 
 
@@ -81,12 +85,25 @@ def _app_config_with_image_pull_policy(image_pull_policy: str) -> AppConfig:
     )
 
 
-def _app_config_with_egress_disable_ipv6(disable_ipv6: bool = True) -> AppConfig:
-    """Build an AppConfig with ``egress.disable_ipv6`` set (privileged execd init when egress is used)."""
-    return AppConfig(
-        runtime=RuntimeConfig(type="kubernetes", execd_image="execd:test"),
-        kubernetes=KubernetesRuntimeConfig(namespace="test-ns"),
-        egress=EgressConfig(disable_ipv6=disable_ipv6),
+def _egress_settings(
+    network_policy: NetworkPolicy,
+    *,
+    image: str = "opensandbox/egress:v1.1.7",
+    mode: str = EGRESS_MODE_DNS,
+    auth_token: str | None = None,
+    credential_proxy_enabled: bool = False,
+    disable_ipv6: bool = True,
+) -> EgressWorkloadSettings:
+    return EgressWorkloadSettings(
+        network_policy=network_policy,
+        image=image,
+        mode=mode,
+        auth_token=auth_token,
+        credential_proxy_enabled=credential_proxy_enabled,
+        env={},
+        disable_ipv6=disable_ipv6,
+        resource_requests=None,
+        resource_limits=None,
     )
 
 
@@ -644,6 +661,201 @@ spec:
         assert mount_names.count("opensandbox-bin") == 1
         assert "sandbox-shared-data" in mount_names
 
+    def test_create_workload_applies_template_container_security_context(self, mock_k8s_client, tmp_path):
+        template_file = tmp_path / "template.yaml"
+        template_file.write_text(
+            """
+spec:
+  template:
+    spec:
+      containers:
+        - name: sandbox
+          image: ubuntu:latest
+          securityContext:
+            runAsNonRoot: true
+            seccompProfile:
+              type: Unconfined
+"""
+        )
+        provider = BatchSandboxProvider(
+            mock_k8s_client, _app_config_with_template(str(template_file))
+        )
+        mock_k8s_client.create_custom_object.return_value = {
+            "metadata": {"name": "sandbox-test", "uid": "uid"}
+        }
+
+        provider.create_workload(
+            sandbox_id="test-id",
+            namespace="test-ns",
+            image_spec=ImageSpec(uri="python:3.11"),
+            entrypoint=["/bin/bash"],
+            env={},
+            resource_limits={},
+            labels={},
+            expires_at=datetime(2025, 12, 31, tzinfo=timezone.utc),
+            execd_image="execd:latest",
+        )
+
+        body = mock_k8s_client.create_custom_object.call_args.kwargs["body"]
+        container = body["spec"]["template"]["spec"]["containers"][0]
+
+        # Template image must not override the runtime image, but its container
+        # securityContext should be propagated to the generated Pod.
+        assert container["name"] == "sandbox"
+        assert container["image"] == "python:3.11"
+        assert container["securityContext"] == {
+            "runAsNonRoot": True,
+            "seccompProfile": {"type": "Unconfined"},
+        }
+
+    def test_create_workload_merges_template_security_context_with_runtime_network_policy(
+        self, mock_k8s_client, tmp_path
+    ):
+        template_file = tmp_path / "template.yaml"
+        template_file.write_text(
+            """
+spec:
+  template:
+    spec:
+      containers:
+        - name: sandbox
+          image: ubuntu:latest
+          securityContext:
+            runAsNonRoot: true
+"""
+        )
+        provider = BatchSandboxProvider(
+            mock_k8s_client, _app_config_with_template(str(template_file))
+        )
+        mock_k8s_client.create_custom_object.return_value = {
+            "metadata": {"name": "sandbox-test", "uid": "uid"}
+        }
+
+        provider.create_workload(
+            sandbox_id="test-id",
+            namespace="test-ns",
+            image_spec=ImageSpec(uri="python:3.11"),
+            entrypoint=["/bin/bash"],
+            env={},
+            resource_limits={},
+            labels={},
+            expires_at=datetime(2025, 12, 31, tzinfo=timezone.utc),
+            execd_image="execd:latest",
+            egress_settings=_egress_settings(
+                NetworkPolicy(default_action="deny", egress=[])
+            ),
+        )
+
+        body = mock_k8s_client.create_custom_object.call_args.kwargs["body"]
+        container = body["spec"]["template"]["spec"]["containers"][0]
+
+        # Runtime-provided securityContext keys (network policy capabilities) win;
+        # template-provided keys supplement rather than replace them.
+        assert container["securityContext"] == {
+            "runAsNonRoot": True,
+            "capabilities": {"drop": ["NET_ADMIN"]},
+        }
+
+    def test_create_workload_merges_template_nested_capabilities_with_runtime_network_policy(
+        self, mock_k8s_client, tmp_path
+    ):
+        template_file = tmp_path / "template.yaml"
+        template_file.write_text(
+            """
+spec:
+  template:
+    spec:
+      containers:
+        - name: sandbox
+          image: ubuntu:latest
+          securityContext:
+            capabilities:
+              add:
+                - SYS_PTRACE
+"""
+        )
+        provider = BatchSandboxProvider(
+            mock_k8s_client, _app_config_with_template(str(template_file))
+        )
+        mock_k8s_client.create_custom_object.return_value = {
+            "metadata": {"name": "sandbox-test", "uid": "uid"}
+        }
+
+        provider.create_workload(
+            sandbox_id="test-id",
+            namespace="test-ns",
+            image_spec=ImageSpec(uri="python:3.11"),
+            entrypoint=["/bin/bash"],
+            env={},
+            resource_limits={},
+            labels={},
+            expires_at=datetime(2025, 12, 31, tzinfo=timezone.utc),
+            execd_image="execd:latest",
+            egress_settings=_egress_settings(
+                NetworkPolicy(default_action="deny", egress=[])
+            ),
+        )
+
+        body = mock_k8s_client.create_custom_object.call_args.kwargs["body"]
+        container = body["spec"]["template"]["spec"]["containers"][0]
+
+        # Nested dicts merge: the template's capabilities.add survives even though
+        # network-policy wiring populates a different member (capabilities.drop).
+        assert container["securityContext"] == {
+            "capabilities": {
+                "add": ["SYS_PTRACE"],
+                "drop": ["NET_ADMIN"],
+            },
+        }
+
+    def test_create_workload_runtime_capabilities_win_over_template_conflicts(
+        self, mock_k8s_client, tmp_path
+    ):
+        template_file = tmp_path / "template.yaml"
+        template_file.write_text(
+            """
+spec:
+  template:
+    spec:
+      containers:
+        - name: sandbox
+          image: ubuntu:latest
+          securityContext:
+            capabilities:
+              drop:
+                - ALL
+"""
+        )
+        provider = BatchSandboxProvider(
+            mock_k8s_client, _app_config_with_template(str(template_file))
+        )
+        mock_k8s_client.create_custom_object.return_value = {
+            "metadata": {"name": "sandbox-test", "uid": "uid"}
+        }
+
+        provider.create_workload(
+            sandbox_id="test-id",
+            namespace="test-ns",
+            image_spec=ImageSpec(uri="python:3.11"),
+            entrypoint=["/bin/bash"],
+            env={},
+            resource_limits={},
+            labels={},
+            expires_at=datetime(2025, 12, 31, tzinfo=timezone.utc),
+            execd_image="execd:latest",
+            egress_settings=_egress_settings(
+                NetworkPolicy(default_action="deny", egress=[])
+            ),
+        )
+
+        body = mock_k8s_client.create_custom_object.call_args.kwargs["body"]
+        container = body["spec"]["template"]["spec"]["containers"][0]
+
+        # Conflicting leaves keep the runtime value (network-policy requirement).
+        assert container["securityContext"] == {
+            "capabilities": {"drop": ["NET_ADMIN"]},
+        }
+
     def test_create_workload_sets_resource_limits_and_requests(self, mock_k8s_client):
         provider = BatchSandboxProvider(mock_k8s_client)
         mock_k8s_client.create_custom_object.return_value = {
@@ -1071,6 +1283,57 @@ spec:
         assert result["state"] == "Pending"
         assert result["reason"] == "BATCHSANDBOX_PENDING"
 
+    def test_get_status_reports_pool_capacity_condition(self):
+        provider = BatchSandboxProvider(MagicMock())
+        workload = {
+            "status": {
+                "phase": "Pending",
+                "replicas": 0,
+                "ready": 0,
+                "allocated": 0,
+                "conditions": [
+                    {
+                        "type": "PoolAllocationPending",
+                        "status": "True",
+                        "reason": "PoolCapacityExhausted",
+                        "message": "Pool example-pool is at capacity",
+                    }
+                ],
+            },
+            "metadata": {"creationTimestamp": "2025-12-24T10:00:00Z"},
+        }
+
+        result = provider.get_status(workload)
+
+        assert result["state"] == "Pending"
+        assert result["reason"] == POOL_CAPACITY_EXHAUSTED_REASON
+        assert _is_pool_capacity_exhausted_status(result)
+        assert result["message"] == "Pool example-pool is at capacity"
+
+    def test_get_status_succeed_phase_wins_over_stale_pool_capacity_condition(self):
+        provider = BatchSandboxProvider(MagicMock())
+        workload = {
+            "status": {
+                "phase": "Succeed",
+                "replicas": 1,
+                "ready": 1,
+                "allocated": 1,
+                "conditions": [
+                    {
+                        "type": "PoolAllocationPending",
+                        "status": "True",
+                        "reason": "PoolCapacityExhausted",
+                    }
+                ],
+            },
+            "metadata": {"creationTimestamp": "2025-12-24T10:00:00Z"},
+        }
+
+        result = provider.get_status(workload)
+
+        assert result["state"] == "Running"
+        assert result["reason"] == "RUNNING"
+
     def test_get_status_returns_failed_when_pod_unschedulable(self):
         mock_k8s_client = MagicMock()
         provider = BatchSandboxProvider(mock_k8s_client)
@@ -1387,27 +1650,9 @@ spec:
                 expires_at=datetime(2025, 12, 31, tzinfo=timezone.utc),
                 execd_image="execd:latest",
                 extensions={"poolRef": "my-pool"},
-                network_policy=NetworkPolicy(default_action="deny", egress=[]),
-            )
-
-        mock_k8s_client.create_custom_object.assert_not_called()
-
-    def test_create_workload_poolref_rejects_credential_proxy(self, mock_k8s_client):
-        provider = BatchSandboxProvider(mock_k8s_client)
-
-        with pytest.raises(ValueError, match="Pool mode does not support credentialProxy.enabled"):
-            provider.create_workload(
-                sandbox_id="test-id",
-                namespace="test-ns",
-                image_spec=ImageSpec(uri="python:3.11"),
-                entrypoint=["/bin/bash"],
-                env={},
-                resource_limits={},
-                labels={},
-                expires_at=datetime(2025, 12, 31, tzinfo=timezone.utc),
-                execd_image="execd:latest",
-                extensions={"poolRef": "my-pool"},
-                credential_proxy_enabled=True,
+                egress_settings=_egress_settings(
+                    NetworkPolicy(default_action="deny", egress=[])
+                ),
             )
 
         mock_k8s_client.create_custom_object.assert_not_called()
@@ -1790,8 +2035,6 @@ class TestBatchSandboxProviderEgress:
             labels={},
             expires_at=expires_at,
             execd_image="execd:latest",
-            network_policy=None,
-            egress_image=None,
         )
 
         body = mock_k8s_client.create_custom_object.call_args.kwargs["body"]
@@ -1807,10 +2050,7 @@ class TestBatchSandboxProviderEgress:
         )
 
     def test_create_workload_with_network_policy_adds_sidecar(self, mock_k8s_client):
-        provider = BatchSandboxProvider(
-            mock_k8s_client,
-            _app_config_with_egress_disable_ipv6(),
-        )
+        provider = BatchSandboxProvider(mock_k8s_client)
         mock_k8s_client.create_custom_object.return_value = {
             "metadata": {"name": "test-id", "uid": "test-uid"}
         }
@@ -1831,9 +2071,10 @@ class TestBatchSandboxProviderEgress:
             labels={},
             expires_at=expires_at,
             execd_image="execd:latest",
-            network_policy=network_policy,
-            egress_image="opensandbox/egress:v1.1.6",
-            credential_proxy_enabled=True,
+            egress_settings=_egress_settings(
+                network_policy,
+                credential_proxy_enabled=True,
+            ),
         )
 
         body = mock_k8s_client.create_custom_object.call_args.kwargs["body"]
@@ -1846,7 +2087,7 @@ class TestBatchSandboxProviderEgress:
         # Find sidecar container
         sidecar = next((c for c in containers if c["name"] == "egress"), None)
         assert sidecar is not None
-        assert sidecar["image"] == "opensandbox/egress:v1.1.6"
+        assert sidecar["image"] == "opensandbox/egress:v1.1.7"
 
         # Verify sidecar has environment variable
         env_vars = {e["name"]: e["value"] for e in sidecar.get("env", [])}
@@ -1890,10 +2131,7 @@ class TestBatchSandboxProviderEgress:
     def test_create_workload_windows_profile_with_network_policy_keeps_ipv6_disable(
         self, mock_k8s_client
     ):
-        provider = BatchSandboxProvider(
-            mock_k8s_client,
-            _app_config_with_egress_disable_ipv6(),
-        )
+        provider = BatchSandboxProvider(mock_k8s_client)
         mock_k8s_client.create_custom_object.return_value = {
             "metadata": {"name": "test-id", "uid": "test-uid"}
         }
@@ -1909,8 +2147,9 @@ class TestBatchSandboxProviderEgress:
             expires_at=None,
             execd_image="execd:latest",
             platform=PlatformSpec(os="windows", arch="amd64"),
-            network_policy=NetworkPolicy(default_action="deny", egress=[]),
-            egress_image="opensandbox/egress:v1.1.6",
+            egress_settings=_egress_settings(
+                NetworkPolicy(default_action="deny", egress=[])
+            ),
         )
 
         body = mock_k8s_client.create_custom_object.call_args.kwargs["body"]
@@ -1948,10 +2187,11 @@ class TestBatchSandboxProviderEgress:
             labels={},
             expires_at=None,
             execd_image="execd:latest",
-            network_policy=NetworkPolicy(default_action="deny", egress=[]),
-            egress_image="opensandbox/egress:v1.1.6",
             annotations={SANDBOX_EGRESS_AUTH_TOKEN_METADATA_KEY: "egress-token"},
-            egress_auth_token="egress-token",
+            egress_settings=_egress_settings(
+                NetworkPolicy(default_action="deny", egress=[]),
+                auth_token="egress-token",
+            ),
         )
 
         body = mock_k8s_client.create_custom_object.call_args.kwargs["body"]
@@ -1986,9 +2226,10 @@ class TestBatchSandboxProviderEgress:
             labels={},
             expires_at=None,
             execd_image="execd:latest",
-            network_policy=NetworkPolicy(default_action="deny", egress=[]),
-            egress_image="opensandbox/egress:v1.1.6",
-            egress_mode=EGRESS_MODE_DNS_NFT,
+            egress_settings=_egress_settings(
+                NetworkPolicy(default_action="deny", egress=[]),
+                mode=EGRESS_MODE_DNS_NFT,
+            ),
         )
 
         body = mock_k8s_client.create_custom_object.call_args.kwargs["body"]
@@ -2002,10 +2243,7 @@ class TestBatchSandboxProviderEgress:
         self, mock_k8s_client
     ):
         """IPv6 all.disable is applied in privileged execd init, not Pod sysctls."""
-        provider = BatchSandboxProvider(
-            mock_k8s_client,
-            _app_config_with_egress_disable_ipv6(),
-        )
+        provider = BatchSandboxProvider(mock_k8s_client)
         mock_k8s_client.create_custom_object.return_value = {
             "metadata": {"name": "test-id", "uid": "test-uid"}
         }
@@ -2026,8 +2264,7 @@ class TestBatchSandboxProviderEgress:
             labels={},
             expires_at=expires_at,
             execd_image="execd:latest",
-            network_policy=network_policy,
-            egress_image="opensandbox/egress:v1.1.6",
+            egress_settings=_egress_settings(network_policy),
         )
 
         body = mock_k8s_client.create_custom_object.call_args.kwargs["body"]
@@ -2047,10 +2284,7 @@ class TestBatchSandboxProviderEgress:
         self, mock_k8s_client
     ):
         """With ``egress.disable_ipv6`` false, execd init is not privileged and does not write disable_ipv6."""
-        provider = BatchSandboxProvider(
-            mock_k8s_client,
-            _app_config_with_egress_disable_ipv6(False),
-        )
+        provider = BatchSandboxProvider(mock_k8s_client)
         mock_k8s_client.create_custom_object.return_value = {
             "metadata": {"name": "test-id", "uid": "test-uid"}
         }
@@ -2070,8 +2304,7 @@ class TestBatchSandboxProviderEgress:
             labels={},
             expires_at=None,
             execd_image="execd:latest",
-            network_policy=network_policy,
-            egress_image="opensandbox/egress:v1.1.6",
+            egress_settings=_egress_settings(network_policy, disable_ipv6=False),
         )
 
         body = mock_k8s_client.create_custom_object.call_args.kwargs["body"]
@@ -2105,8 +2338,7 @@ class TestBatchSandboxProviderEgress:
             labels={},
             expires_at=expires_at,
             execd_image="execd:latest",
-            network_policy=network_policy,
-            egress_image="opensandbox/egress:v1.1.6",
+            egress_settings=_egress_settings(network_policy),
         )
 
         body = mock_k8s_client.create_custom_object.call_args.kwargs["body"]
@@ -2122,40 +2354,6 @@ class TestBatchSandboxProviderEgress:
         assert "capabilities" in main_container["securityContext"]
         assert "drop" in main_container["securityContext"]["capabilities"]
         assert "NET_ADMIN" in main_container["securityContext"]["capabilities"]["drop"]
-
-    def test_create_workload_without_egress_image_no_sidecar(self, mock_k8s_client):
-        provider = BatchSandboxProvider(mock_k8s_client)
-        mock_k8s_client.create_custom_object.return_value = {
-            "metadata": {"name": "test-id", "uid": "test-uid"}
-        }
-
-        expires_at = datetime(2025, 12, 31, 10, 0, 0, tzinfo=timezone.utc)
-        network_policy = NetworkPolicy(
-            default_action="deny",
-            egress=[NetworkRule(action="allow", target="example.com")],
-        )
-
-        provider.create_workload(
-            sandbox_id="test-id",
-            namespace="test-ns",
-            image_spec=ImageSpec(uri="python:3.11"),
-            entrypoint=["/bin/bash"],
-            env={},
-            resource_limits={},
-            labels={},
-            expires_at=expires_at,
-            execd_image="execd:latest",
-            network_policy=network_policy,
-            egress_image=None,
-        )
-
-        body = mock_k8s_client.create_custom_object.call_args.kwargs["body"]
-        pod_spec = body["spec"]["template"]["spec"]
-        containers = pod_spec["containers"]
-
-        # Should only have main container
-        assert len(containers) == 1
-        assert containers[0]["name"] == "sandbox"
 
     def test_egress_sidecar_contains_network_policy_in_env(self, mock_k8s_client):
         provider = BatchSandboxProvider(mock_k8s_client)
@@ -2182,8 +2380,7 @@ class TestBatchSandboxProviderEgress:
             labels={},
             expires_at=expires_at,
             execd_image="execd:latest",
-            network_policy=network_policy,
-            egress_image="opensandbox/egress:v1.1.6",
+            egress_settings=_egress_settings(network_policy),
         )
 
         body = mock_k8s_client.create_custom_object.call_args.kwargs["body"]
@@ -2223,8 +2420,6 @@ class TestBatchSandboxProviderEgress:
             labels={},
             expires_at=expires_at,
             execd_image="execd:latest",
-            network_policy=None,
-            egress_image=None,
         )
 
         body = mock_k8s_client.create_custom_object.call_args.kwargs["body"]
@@ -2272,8 +2467,7 @@ spec:
             labels={},
             expires_at=expires_at,
             execd_image="execd:latest",
-            network_policy=network_policy,
-            egress_image="opensandbox/egress:v1.1.6",
+            egress_settings=_egress_settings(network_policy),
         )
 
         body = mock_k8s_client.create_custom_object.call_args.kwargs["body"]
@@ -2520,8 +2714,12 @@ spec:
             "status": {"phase": "Succeed", "conditions": []},
         }
 
-        with pytest.raises(ValueError, match="expected Paused"):
+        with pytest.raises(ValueError) as exc_info:
             provider.resume_sandbox("test-id", "test-ns")
+
+        assert str(exc_info.value) == (
+            "Cannot resume sandbox in state Running, expected Paused"
+        )
 
     def test_get_status_succeed_phase_maps_to_running_state(self):
         provider = BatchSandboxProvider(MagicMock())

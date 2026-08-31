@@ -14,21 +14,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Init mode (OSEP-0018, phase 1): execd is the sandbox init. It reaps every
-// child through a single reaper, forwards application signals to the user
-// entrypoint, and owns the container lifecycle (entrypoint exit code is
-// propagated to the runtime).
+// Init mode (OSEP-0018): execd is the sandbox init — it reaps children
+// through a single reaper, forwards application signals to the entrypoint,
+// and owns the container lifecycle (exit code propagated to the runtime).
 //
-// The reaper is the only wait4-family caller in init mode, so execd never
-// calls os/exec.Cmd.Wait for its own children. Callers build the process with
-// exec.Command as usual but launch and wait through the managedProcess
-// abstraction, which reproduces the pipe teardown Cmd.Wait would otherwise
-// perform.
-//
-// The reaper registry lock spans child start and registration: a child is
-// added to the owned map before any concurrent drain can observe it, so the
-// start/register race is closed structurally. Any child observed that is not
-// owned is a reparented orphan and is reaped and logged.
+// The reaper is the only wait4-family caller, so execd never calls
+// os/exec.Cmd.Wait; managedProcess reproduces the pipe teardown Cmd.Wait
+// would perform. The reaper registry lock spans child start and
+// registration, closing the start/register race structurally; unowned
+// children are reparented orphans, reaped and logged.
 
 package runtime
 
@@ -150,7 +144,7 @@ func (r *reaper) start() {
 }
 
 // stop terminates the reaper and waits until its signal subscription is
-// removed. Test-only in practice; execd runs one reaper for its lifetime.
+// removed.
 //
 //nolint:unused // test-only lifecycle; execd runs one reaper for its lifetime
 func (r *reaper) stop() {
@@ -239,6 +233,8 @@ func (r *reaper) drain() {
 // share one launch path regardless of mode.
 type managedProcess struct {
 	cmd         *exec.Cmd
+	stateMu     sync.Mutex
+	exited      bool
 	preReap     func()
 	noHardening bool
 	stripEnv    []string // nil = default blacklist; explicit list overrides
@@ -266,16 +262,44 @@ func (mp *managedProcess) deliver(ws syscall.WaitStatus) {
 
 func (mp *managedProcess) Wait() error {
 	if initReaper == nil {
-		return mp.cmd.Wait()
+		return waitCommandWithExitBarrier(mp.cmd, func(_ error) {
+			// Success marks exit before reap. A failed barrier cannot prove
+			// ownership, so also disable signaling rather than risk PID reuse.
+			mp.stateMu.Lock()
+			mp.exited = true
+			mp.stateMu.Unlock()
+		})
 	}
 	<-mp.done
 	return mp.exitErr
+}
+
+func (mp *managedProcess) Cancel(cancel func()) {
+	if initReaper == nil {
+		mp.stateMu.Lock()
+		defer mp.stateMu.Unlock()
+		if !mp.exited {
+			cancel()
+		}
+		return
+	}
+
+	// Keep the reaper lock across signal delivery so the PID/PGID cannot be
+	// recycled. cancel must only deliver a signal and must not block.
+	initReaper.mu.Lock()
+	defer initReaper.mu.Unlock()
+	if initReaper.owned[mp.pid()] == mp {
+		cancel()
+	}
 }
 
 // ExitCode returns the process exit code, or -1 if it has not exited (or was
 // killed by a signal), matching os.ProcessState.ExitCode semantics.
 func (mp *managedProcess) ExitCode() int {
 	if initReaper == nil {
+		if mp.cmd.ProcessState == nil {
+			return -1
+		}
 		return mp.cmd.ProcessState.ExitCode()
 	}
 	select {
@@ -307,14 +331,17 @@ func withoutHardening() launchOption {
 	}
 }
 
-// bootstrapEnv overrides the env strip for the user entrypoint: the image's
-// own entrypoint scripts may need JUPYTER_TOKEN/EXECD_ENVS to configure
-// themselves (e.g. the code-interpreter entrypoint), so those survive — but
-// EXECD_ACCESS_TOKEN is execd's control-plane credential and must never
-// reach the long-lived entrypoint (its Jupyter kernels are user code).
+// bootstrapEnv overrides the env strip for the user entrypoint: its scripts
+// may need JUPYTER_TOKEN/EXECD_ENVS to configure themselves (e.g. the
+// code-interpreter entrypoint), but credentials and lifecycle transport must
+// never reach the long-lived entrypoint (its Jupyter kernels are user code).
 func bootstrapEnv() launchOption {
 	return func(mp *managedProcess) {
-		mp.stripEnv = []string{"EXECD_ACCESS_TOKEN"}
+		mp.stripEnv = []string{
+			"EXECD_ACCESS_TOKEN",
+			"OPENSANDBOX_LIFECYCLE",
+			"EXECD_LIFECYCLE_CONFIG",
+		}
 	}
 }
 
@@ -390,12 +417,10 @@ func exitStatusError(ws syscall.WaitStatus) error {
 	return &processExitError{code: -1, msg: fmt.Sprintf("signal: %v", ws.Signal())}
 }
 
-// StartInitMode activates init duties: non-dumpable self, subreaper fallback
-// when not PID 1, the reaper, the user entrypoint, signal forwarding, and the
-// container lifecycle owner. It returns once the entrypoint is launched; the
-// process is torn down via os.Exit when the entrypoint exits or SIGTERM
-// arrives.
-func StartInitMode(entryArgs []string) {
+// PrepareInitMode activates the init/reaper duties and registers signal
+// handling before any managed child starts. The returned function launches
+// the user entrypoint after execd has started serving and preStart succeeds.
+func PrepareInitMode() func([]string) error {
 	if err := unix.Prctl(unix.PR_SET_DUMPABLE, 0, 0, 0, 0); err != nil {
 		log.Warn("init: PR_SET_DUMPABLE(0) failed: %v", err)
 	}
@@ -417,21 +442,53 @@ func StartInitMode(entryArgs []string) {
 	// hitting the runtime default handler.
 	sigCh := make(chan os.Signal, 8)
 	signal.Notify(sigCh, initForwardedSignals...)
+	entryCh := make(chan *managedProcess, 1)
+	safego.Go(func() { forwardInitSignalsWhenReady(entryCh, sigCh) })
 
-	entry := launchEntrypoint(entryArgs)
-	if entry == nil {
-		signal.Stop(sigCh)
-		return
-	}
-	safego.Go(func() { forwardInitSignals(entry, sigCh) })
-	safego.Go(func() { waitEntrypointExit(entry) })
-}
-
-func launchEntrypoint(args []string) *managedProcess {
-	if len(args) == 0 {
-		log.Warn("init: --init set but no user command provided; no entrypoint to supervise")
+	return func(entryArgs []string) error {
+		if len(entryArgs) == 0 {
+			log.Warn("init: --init set but no user command provided; no entrypoint to supervise")
+			entryCh <- nil
+			return nil
+		}
+		entry, err := launchEntrypoint(entryArgs)
+		if err != nil {
+			entryCh <- nil
+			return err
+		}
+		entryCh <- entry
+		safego.Go(func() { waitEntrypointExit(entry) })
 		return nil
 	}
+}
+
+func forwardInitSignalsWhenReady(
+	entryCh <-chan *managedProcess,
+	sigCh chan os.Signal,
+) {
+	termPending := false
+	for {
+		select {
+		case entry := <-entryCh:
+			if entry == nil {
+				signal.Stop(sigCh)
+				return
+			}
+			if termPending {
+				terminateInit(entry)
+				return
+			}
+			forwardInitSignals(entry, sigCh)
+			return
+		case sig := <-sigCh:
+			if sig == syscall.SIGTERM {
+				termPending = true
+			}
+		}
+	}
+}
+
+func launchEntrypoint(args []string) (*managedProcess, error) {
 	cmd := exec.Command(args[0], args[1:]...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Stdin = os.Stdin
@@ -439,11 +496,10 @@ func launchEntrypoint(args []string) *managedProcess {
 	cmd.Stderr = os.Stderr
 	mp, err := launchManaged(cmd, bootstrapEnv())
 	if err != nil {
-		log.Error("init: failed to start user entrypoint %q: %v", args[0], err)
-		os.Exit(1)
+		return nil, fmt.Errorf("start user entrypoint %q: %w", args[0], err)
 	}
 	log.Info("init: user entrypoint started pid=%d argv=%v", mp.pid(), args)
-	return mp
+	return mp, nil
 }
 
 // waitEntrypointExit owns the container lifecycle: when the entrypoint exits,
@@ -522,10 +578,9 @@ func terminateInit(entry *managedProcess) {
 // SIGKILLs the survivors. Reaping is done by the reaper; the kernel reaps
 // anything left when execd exits.
 func stopChildrenExcept(keep *managedProcess) {
-	// SIGTERM and the final SIGKILL pass are sent while holding the reaper
-	// lock: the pid is verified against the owned map and the reaper cannot
-	// consume (and release) the PID/PGID between verification and kill, so
-	// a recycled process group can never be signalled.
+	// Signal while holding the reaper lock: the pid stays verified against
+	// the owned map, so the reaper cannot release the PID/PGID between the
+	// check and the kill (no recycled process group can be signalled).
 	others := initReaper.signalOthers(keep, syscall.SIGTERM)
 	if len(others) == 0 {
 		return

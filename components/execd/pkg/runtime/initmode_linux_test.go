@@ -17,6 +17,7 @@
 package runtime
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -175,26 +176,20 @@ func TestReaperReapsOrphan(t *testing.T) {
 	t.Fatalf("orphan pid %d was not reaped by the reaper", pid)
 }
 
-// TestReaperSweepBackstop verifies the periodic sweep drains children even
-// when no SIGCHLD notification can reach the run loop — the lost/coalesced
-// signal case the sweep ticker backstops (OSEP-0018 R-t).
-//
-// The reaper's signal.Notify subscription stays registered (which also stops
-// the Go runtime from auto-reaping children), but the run loop is severed
-// from the subscribed channel before it starts, so the kernel-delivered
-// SIGCHLD goes nowhere. Only the ticker can reap the exiting child.
+// TestReaperSweepBackstop verifies the sweep ticker drains children even when
+// no SIGCHLD can reach the run loop (lost/coalesced signals, OSEP-0018 R-t).
+// The Notify subscription stays registered (blocking the Go runtime's
+// auto-reap), but the run loop is severed from the subscribed channel, so
+// only the ticker can reap the exiting child.
 func TestReaperSweepBackstop(t *testing.T) {
 	oldInterval := reaperSweepInterval
 	reaperSweepInterval = 50 * time.Millisecond
-	defer func() { reaperSweepInterval = oldInterval }()
 
 	r := newReaper()
 	r.start()
-	// Replace the subscribed channel before the run loop reads it: the kernel
-	// keeps signalling the subscribed channel (unread), so the loop below can
-	// only ever drain via the sweep ticker. Keep the original channel so
-	// cleanup can stop the subscription — signal.Stop on the replacement
-	// would leave the process-global SIGCHLD handler registered.
+	// Sever the run loop from the subscribed channel: the kernel keeps
+	// signalling the (unread) original, so only the sweep ticker can drain.
+	// signal.Stop must still target the original channel.
 	subscribed := r.sigchld
 	r.sigchld = make(chan os.Signal, 1)
 	initReaper = r
@@ -202,6 +197,7 @@ func TestReaperSweepBackstop(t *testing.T) {
 		initReaper.stop()
 		signal.Stop(subscribed)
 		initReaper = nil
+		reaperSweepInterval = oldInterval
 	})
 	go r.run()
 
@@ -366,5 +362,21 @@ func TestManagedProcessWithoutReaperUsesCmdWait(t *testing.T) {
 	}
 	if mp.ExitCode() != 4 {
 		t.Fatalf("ExitCode = %d, want 4", mp.ExitCode())
+	}
+}
+
+func TestRunManagedCommandWithReaper(t *testing.T) {
+	startReaperForTest(t)
+	cmd := exec.Command("sh", "-c", "exit 17")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	exitCode, err := RunManagedCommand(context.Background(), cmd, func() {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	})
+	if err == nil {
+		t.Fatal("RunManagedCommand error = nil, want exit status 17")
+	}
+	if exitCode != 17 {
+		t.Fatalf("RunManagedCommand exit code = %d, want 17", exitCode)
 	}
 }
