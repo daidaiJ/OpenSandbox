@@ -28,6 +28,7 @@
 | [沙箱控制器多副本部署与调优参数调研](opensandbox-controller-multi-replica-tuning.md) | leader election 多副本 HA、concurrency/qps/burst 等调优参数清单 | 2026-08-27 |
 | [Pool 容量四参数（poolMin/poolMax/bufferMin/bufferMax）调研](opensandbox-pool-capacity-params.md) | 池模式容量参数定义、滞回伸缩算法、调参要点与边界 | 2026-08-27 |
 | [Pool 池模式扩缩容机理与延迟计算（运维手册）](opensandbox-pool-scaling-mechanism-ops.md) | 事件驱动机理、分配/扩容/缩容延迟公式与示例、参数范围表、观测与排查 | 2026-08-27 |
+| [OSEP-0020 生命周期钩子：实施状态与池模式注入路径](opensandbox-lifecycle-hooks-osep0020-status-and-injection.md) | hooks 集与执行通道、分阶段实施状态（PATCH 未实现）、task/alloc 注入链路、池模式限制与替代方案 | 2026-08-31 |
 
 ## 方案设计
 
