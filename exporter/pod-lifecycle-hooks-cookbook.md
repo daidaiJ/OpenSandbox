@@ -14,6 +14,8 @@
 
 当前 `POST /sandboxes` 无 lifecycle 字段；经 API 创建的沙箱默认无钩子。手写 CR 可用；对外暴露见 §1。
 
+> **版本前提（2026-09-01 实测）**：controller 与 task-executor 镜像必须为包含 #420（2026-07-20）的构建——registry 当前仅 `latest` 满足。v0.2.0 及更早版本两处失效：controller reconcile 重写 `spec.taskTemplate` 时**静默抹掉 `lifecycle`**（特征：`metadata.generation` 无故 +1、task-executor `getTasks` 缺字段）；task-executor v0.2.0 二进制中无 postStop 执行逻辑。完整最小镜像矩阵与手写 CR 直注 execd 钩子的方案见 `sandbox-lifecycle-hooks-cookbook.md` §3.4。
+
 ## 目录
 
 - [1. 规划：server API 暴露 postStop（未落地）](#1-规划server-api-暴露-poststop未落地)

@@ -10,6 +10,7 @@
 | 访问 | 业务流量经 server proxy |
 | 生命周期 | 申请 → 使用 → 释放；不使用 pause/resume |
 | 上游版本 | server v0.2.3 / execd v1.1.0（upstream/main @ `f91f153c` 已核对） |
+| 组件最小镜像（hook 能力基线，2026-09-01 实测） | controller `latest`（v0.2.0 及更早不支持）、task-executor `latest`（v0.2.0 及更早不支持）、execd `v1.1.0`；详见 §3.4 版本矩阵 |
 
 ## 目录
 
@@ -56,11 +57,11 @@ OSEP-0020 的 Non-goal 明确：task-level hooks 保持不变。**两者可共�
 
 | 阶段 | 内容 | 状态 | 对业务的影响 |
 |---|---|---|---|
-| 1 | execd：配置持久化 + `preStart`/`periodic` 执行 | ✅ execd v1.1.0 | 具备执行能力 |
+| 1 | execd：配置持久化 + `preStart`/`periodic` 执行 | ✅ execd v1.1.0（**2026-09-01 池模式实测通过**） | 具备执行能力 |
 | 2 | spec `lifecycle` 字段 + SDK 模型 + server create 传输 | ✅ server v0.2.3 | **直建 K8s 可用；池化被 schema 校验 400 拦截** |
 | 3 | `run`/`config`/`status` 端点、PATCH、其余 transition hooks | ❌ future | 运行时改钩子暂不可能 |
 | 4 | Docker/K8s provider 编排（prePause/postResume/preTerminate）、grace 接线 | ❌ future | 终止前回调暂不可能 |
-| 5 | **池化支持**：per-sandbox 经 `taskTemplate` 注入（R11，最后一期） | ❌ future | **池化 create 带 lifecycle 暂不可能** |
+| 5 | **池化支持**：per-sandbox 经 `taskTemplate` 注入（R11，最后一期） | ❌ future；**R11 原型已实测可用** | server API 池化 create 带 lifecycle 暂不可能；**手写 BatchSandbox CR 直注已实测打通**（§3.4） |
 
 池化被拦截的硬证据：`lifecycle` + `extensions.poolRef` 组合在 server schema 校验直接 400（`schema.py` `validate_source_and_entrypoint`）；官方文档 `docs/guides/lifecycle-hooks.md` 明文 "A request cannot combine `lifecycle` with `poolRef`"。
 
@@ -73,6 +74,7 @@ OSEP-0020 的 Non-goal 明确：task-level hooks 保持不变。**两者可共�
 | `env` 注入配置值 | 分配时经 taskTemplate | 随容器启动生效 | **推荐**，用户信息注入已在用（D-8） |
 | 自定义 `entrypoint` 包装初始化命令 | 分配时经 taskTemplate（覆盖预热 entrypoint） | ✅ 初始化在 Ready 前完成，**失败即启动失败** | 需要跑命令时用；注意会走出"零修改认领"fast path |
 | Ready 后业务层 exec | 申请成功后 | ❌ 业务层自保证顺序 | 无服务端保证，仅作兜底 |
+| **手写 BatchSandbox CR 直注 `OPENSANDBOX_LIFECYCLE`** | 分配时经 taskTemplate env | ✅ execd 层保证（校验失败 startup abort） | R11 原型，**2026-09-01 实测打通**；server API 放开前的过渡形态，见 §3.4 |
 | （将来）`preStart` hook | phase 5 放开后 | ✅ execd 层保证，失败 abort | 到时 create 请求直接加 `lifecycle` 字段 |
 
 ### 3.1 env 注入（配置值类初始化）
@@ -103,9 +105,51 @@ curl -X POST "$SERVER/sandboxes" -H 'Content-Type: application/json' -d '{
 
 要点：初始化失败要 `exit 非 0`，让沙箱**启动失败**而不是带着脏状态变 Ready；`exec` 保证业务进程接管 PID，信号能送达。
 
-### 3.3 禁止走私 lifecycle 配置
+### 3.3 禁止走私 lifecycle 配置（经 server 的 create）
 
-env 里私带 `OPENSANDBOX_LIFECYCLE` 变量名会被保留名校验拒绝——这是 phase 5 之前的正常防线，不要绕。
+经 server create 时，env 里私带 `OPENSANDBOX_LIFECYCLE` 变量名会被保留名校验拒绝（`schema.py`）——这是 phase 5 之前的正常防线，不要绕。**手写 BatchSandbox CR 不经 server**，直注见 §3.4。
+
+### 3.4 手写 CR 直注 execd 钩子（R11 原型，2026-09-01 实测打通）
+
+不经 server、直接创建带 `taskTemplate` 的 BatchSandbox，把 execd 钩子 JSON 放进 `OPENSANDBOX_LIFECYCLE` env（保留名校验只在 server 层，controller 链路不受限）：
+
+```yaml
+apiVersion: sandbox.opensandbox.io/v1alpha1
+kind: BatchSandbox
+metadata:
+  name: hook-demo
+  namespace: opensandbox
+spec:
+  poolRef: my-pool
+  replicas: 1
+  taskTemplate:
+    spec:
+      process:
+        command: ["/bin/sh", "-c", "exec /opt/opensandbox/bootstrap.sh sleep 3600"]
+        env:
+          - name: EXECD_INIT
+            value: "1"
+          - name: OPENSANDBOX_ID
+            value: hook-demo
+          - name: OPENSANDBOX_LIFECYCLE
+            value: '{"version":1,"periodic":[{"name":"heartbeat","schedule":"@every 30s","command":["/bin/sh","-c","date +%FT%T%z >> /workspace/logs/heartbeat.log"],"timeoutSeconds":10}]}'
+```
+
+**组件最小镜像版本（池模式 hook 能力基线，2026-09-01 registry 逐一实测）**
+
+| 组件 | 最小可用版本 | 实测依据 |
+|---|---|---|
+| controller | `opensandbox/controller:latest`（**v0.2.0 及更早不支持**） | v0.2.0 部署实测：reconcile 用旧 typed struct 重写 `spec.taskTemplate`，静默抹掉 `process.lifecycle` 与注入字段（特征：`metadata.generation` 无故 +1、`getTasks` 缺字段）；`latest` 锚定为上游 main ≥ `cf808310`（2026-08-25）的滚动构建（Go 1.25.12 + alpine 基座 = `1c94cc5b` 2026-07-13 之后），含 #420；正式 release 发布后以 release tag 为准 |
+| task-executor | `opensandbox/task-executor:latest`（**v0.2.0 及更早不支持**） | 二进制特征串 grep：v0.2.0 无 `Executing postStop lifecycle hook`（Go 1.24.13 构建），latest 有（Go 1.25.12 构建） |
+| execd | `opensandbox/execd:v1.1.0`（v1.0.x 无 OSEP-0020 hooks） | phase 1 能力随 v1.1.0 发布；池模板 initContainer 安装 `./execd + ./bootstrap.sh` |
+| 沙箱底座镜像 | 无硬性要求（实测 code-interpreter:v1.1.0） | hook 命令需容器内有 `/bin/sh`；`curl` 需镜像自带或 initContainer 挂入 |
+
+要点与实测结论（k3s 双节点）：
+
+- controller 与 task-executor 必须**同代升级**（同为 ≥ #420 的构建），单边升级会停在"字段被抹 / 字段无人执行"的半生效状态。
+- `EXECD_INIT=1` 时 bootstrap.sh `exec execd --init`，execd 校验后原子落盘 `~/.execd/lifecycle.toml`（HOME=/root）并 unset 传输 env；`periodic` 由 execd 内置 cron 调度，实测 `@every 30s` 五拍间隔精确、无漂移。
+- task-executor 层 `postStop`（`process.lifecycle.postStop`）触发语义：entrypoint 终态**立即执行**（实测退出后 1s 内）；优雅删除**先 stop 进程再执行**（实测 delete 后 2s 内）；**pod 硬杀不执行**（收尾回调等 phase 4 `preTerminate`）。
+- 验证范式：hook 命令"写文件到 emptyDir 卷 + `curl` 打点集群内 mock 服务"双通道取证，pod 回收后证据仍留在 mock 侧。
 
 ## 4. 直建 K8s 沙箱：create 带 lifecycle（已可用）
 
@@ -150,7 +194,7 @@ curl -X POST "$SERVER/sandboxes" -H 'Content-Type: application/json' -d '{
 
 - `preStart` 在 execd HTTP server ready 之后、entrypoint 之前执行；失败或超时 → entrypoint 不启动（Abort）。
 - `periodic` 由 execd 在沙箱内调度；同名钩子上一轮未结束时本轮**跳过**（不排队）。
-- 配置经 create env `OPENSANDBOX_LIFECYCLE`（JSON）传入，execd 校验后原子落盘 `/var/execd/lifecycle.toml`，并 unset 该环境变量（仅传输不残留）。
+- 配置经 create env `OPENSANDBOX_LIFECYCLE`（JSON）传入，execd 校验后原子落盘 `~/.execd/lifecycle.toml`（HOME=/root；可被 `EXECD_LIFECYCLE_CONFIG` 覆盖），并 unset 该环境变量（仅传输不残留）。
 - Docker 与 fleets 运行时会明确拒绝 lifecycle；仅 K8s provider 支持。
 
 ## 5. 现在铺路：Pool 模板按 execd-as-init 建设
@@ -173,7 +217,7 @@ R13 结论：将来 `preTerminate` **仅支持 execd-as-init 拓扑**（execd �
 
 ## 参考
 
-- 调研底稿：`wiki/opensandbox-lifecycle-hooks-osep0020-status-and-injection.md`（🚧 上游功能，随阶段回访）
+- 调研底稿：`wiki/opensandbox-lifecycle-hooks-osep0020-status-and-injection.md`（🚧 上游功能，随阶段回访；2026-09-01 增补池模式注入实测与最小镜像版本矩阵）
 - 提案：`oseps/0020-sandbox-lifecycle-hooks.md`
 - 契约：`specs/sandbox-lifecycle.yml`（`SandboxLifecycle` / `LifecycleHook` / `PeriodicLifecycleHook`）
 - 官方指南：`docs/guides/lifecycle-hooks.md`
