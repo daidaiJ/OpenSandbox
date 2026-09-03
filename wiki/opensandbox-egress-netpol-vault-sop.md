@@ -16,8 +16,9 @@ type: project
 │    池化沙箱默认隔离：同 ns 沙箱互隔 / 平台基础服务禁达 / 白名单(IP,label,端口)放行
 │    承担业务约定 D-7：池化路径不注入 egress sidecar
 │
-├─ 第 2 层（按需，敏感沙箱）：egress sidecar（per-sandbox，dns+nft 模式）
+├─ 第 2 层（按需，敏感沙箱）：egress sidecar（dns+nft 模式）
 │    域名级白名单（DNS 代理 + nft 动态 allow 集）+ Credential Vault（MITM 注入）
+│    非池化=networkPolicy 参数（SOP-B）；池化=Pool 模板预置（SOP-D）
 │    每沙箱 +1 sidecar（约 20–50MB 内存）→ 只给"凭据不落地"硬需求的沙箱
 │
 └─ 第 3 层（未来）：fleet 共享 MITM（OSEP-0022）
@@ -111,7 +112,7 @@ spec:
 - [ ] 沙箱 create 请求同时带：`networkPolicy`（`defaultAction="deny"`）+ `credentialProxy.enabled=true`。binding 的每个 host 必须被 policy 显式 allow（字符串一致，fail-closed 校验）。
 - [ ] 沙箱 Pod 无 mesh sidecar（Istio/Envoy 注入互斥）；非 gVisor 运行时。
 - [ ] （HTTPS 场景）沙箱镜像已信任 MITM CA（镜像预装，或用 sidecar 导出到 `/opt/opensandbox/mitmproxy-ca-cert.pem` 的 bootstrap 流程）。
-- [ ] 池化注意：`credentialProxy.enabled` 与 `poolRef` 互斥（池分配路径拒绝该字段）；敏感沙箱走独立 create 或独立 Pool 模板预置 sidecar。
+- [ ] 池化注意：`credentialProxy.enabled` 与 `poolRef` 互斥（池分配路径拒绝该字段）；敏感沙箱走独立 create 或独立 Pool 模板预置 sidecar（预置配置与验证清单见 SOP-D）。
 
 ### B2. 凭据推送（受信控制面 → sidecar vault API）
 
@@ -163,6 +164,85 @@ auth 类型：`bearer` / `basic`（值=base64(user:pass)）/ `apiKey`（自定�
 
 ---
 
+## SOP-D：池化沙箱模板预置 egress sidecar（按需叠加，2026-09-03 实测）
+
+> 对应场景：某个 Pool 的沙箱需要**域名级白名单 / Vault 凭据不落地 / 运行时动态改出站策略**，而 D-7 的 netpol 基线给不了。本节给出"模板预置 sidecar"的配置、与单沙箱路径的差异和坑，全部在 ubuntu k3s 实测（S1–S9 全 PASS）。
+
+### D0. 这条路解决什么问题（先想清楚再上）
+
+- **为什么池化默认没有它**：池 Pod 预热时 server 不经手 Pod spec，`networkPolicy`、`credentialProxy.enabled` 与 `extensions.poolRef` **互斥（create 直接 400）**；D-7 也主动省掉这 20–50MB/沙箱。所以唯一入口是把 egress 容器写进 Pool 模板。
+- **代价先知道**：策略整池共享（不能 per-request）、审计归因只能到 Pod 粒度、Vault 凭据要"分配后重推"（见 D3）。
+- **口诀**：默认只做 SOP-A 的 netpol 基线；给"确实需要域名级管控/Vault 的那个 Pool"预置 sidecar，其他池不动。
+
+### D1. 池模板配置样例（实测可直接抄）
+
+在标准池模板（initContainer 安装 task-executor/execd + sandbox 主容器，见[池模式部署核心配置](opensandbox-pool-deploy-core-config-guide.md)）的 `containers` 里追加一个 egress 容器：
+
+```yaml
+- name: egress
+  image: <egress-image>   # 实测：.../opensandbox/egress:latest（adadf447-dirty）
+  env:
+    - name: OPENSANDBOX_EGRESS_RULES      # 整池共享的初始策略
+      value: '{"defaultAction":"deny","egress":[{"action":"allow","target":"mock-allow.opensandbox.svc.cluster.local"}]}'
+    - {name: OPENSANDBOX_EGRESS_MODE, value: "dns+nft"}                # Vault 硬前提
+    - {name: OPENSANDBOX_EGRESS_TOKEN, value: "<egress-token>"}        # 改策略/推凭据都要带
+    - {name: OPENSANDBOX_EGRESS_MITMPROXY_TRANSPARENT, value: "true"}  # 用 Vault 才加
+  securityContext:
+    capabilities: {add: ["NET_ADMIN"]}
+  ports: [{name: egress-api, containerPort: 18080}]
+  readinessProbe:
+    httpGet: {path: /healthz, port: 18080}
+    periodSeconds: 2
+    failureThreshold: 60
+```
+
+加固（防御性，可选）：主容器显式 `capabilities: {drop: ["NET_ADMIN"]}`，对齐 server 单沙箱路径的行为（实测默认 caps 本就不含 NET_ADMIN，见 D3-4）。完整可运行模板：官方 `examples/kubernetes/pool-egress-network-policy.yaml`；本次实测版（含 v2 加固 drop、模板更新后 idle Pod 自动重建）在 ubuntu `/tmp/osb-deploy/egress-verify/pool-egress-sidecar*.yaml`（临时目录，以本文档样例为准）。
+
+**红线**：不要给跑用户代码的 sandbox 容器加 privileged/额外 caps（见 D3-4）。
+
+### D2. 验证条件与实测结果（S1–S9 全 PASS）
+
+| 项 | 值 |
+|---|---|
+| 集群 | k3s v1.30.5 双节点（ubuntu master + CentOS worker `k3s-103`），flannel + k3s 内置 netpol，2026-09-03 |
+| 镜像 | 沙箱/mock/跳板 `.../opensandbox/code-interpreter:v1.1.0`；initContainer 安装 task-executor:latest + execd:v1.1.0；egress `:latest`（Version `adadf447-dirty`，build 2026-09-03T01:47:57Z） |
+| 权限 | egress 容器 `NET_ADMIN`；sandbox 容器默认 caps（CapEff=`a80425fb`，位 12=0） |
+| Pod 构成 | sandbox（PID1=task-executor，任务派发后 execd）+ egress 两容器，2 个 initContainer |
+| 资源 | Pool `pool-egress-sidecar`（bufferMin=1/poolMax=2）+ BS `pool-egress-sb`（poolRef 分配）；凭据推送走 mgmt-jump（opensandbox-system ns）→ `<pod-ip>:18080` |
+
+| # | 用例 | 期望 | 实测 |
+|---|---|---|---|
+| S1 | Pool 预热 + poolRef 分配 + 双探针 | Pod 2/2 Ready、BS READY=1 | ✅ 模板更新后 idle Pod 自动按新模板重建 |
+| S3 | 白名单 FQDN 出站 | allowed | ✅ 200 |
+| S2a | 非白名单域名 | DNS 层拒绝 | ✅ rc=6 NXDOMAIN |
+| S2b | 非白名单 IP 直连 | nft 层拒绝 | ✅ rc=28 超时 |
+| S4 | 运行时 `PATCH /policy` 加白 → `DELETE` 删规则 | 动态生效/恢复 | ✅ PATCH 后 200 → DELETE 后 rc=6 |
+| S5 | 主容器 NET_ADMIN | 默认无；显式 drop 亦生效 | ✅ 两种模板 CapEff 位 12 均=0 |
+| S6 | `OPENSANDBOX_EGRESS_SANDBOX_ID` 归因 | （池模式无注入通道） | ✅ env 缺失，日志/事件无 per-sandbox 标识 |
+| S7 | Vault 分配后推送→假 key 覆盖→脱敏读→无 token | 全链路 | ✅ revision=1 / 注入 `vx-s...len=20` / 响应无明文 / 401 |
+| S8 | `/healthz` 无鉴权、`/policy` 无 token 401 | — | ✅ 200 / 401 |
+| S9 | netpol 叠加：沙箱互隔、管理面放行、白名单 | 不冲突 | ✅ 互访 blocked（timeout）、mgmt→沙箱 404 通、Vault 注入照常 |
+
+### D3. 与单沙箱路径的差异与坑（重点记忆）
+
+| # | 差异/坑 | 说明与规避 |
+|---|---|---|
+| 1 | 策略整池共享 | 初始策略写在模板 `OPENSANDBOX_EGRESS_RULES`；改一个沙箱 = 改整池基线。要 per-request 定制就拆独立 Pool 或走非池化 create |
+| 2 | 动态改策略的链路变了 | 不经 server——受信面直连 `<pod-ip>:18080`（或经沙箱 endpoint 解析），必须带 `OPENSANDBOX-EGRESS-AUTH` 头；`PATCH /policy` 体是**裸规则数组**、`DELETE /policy` 体是**裸 target 字符串数组** |
+| 3 | 归因只能到 Pod | `OPENSANDBOX_EGRESS_SANDBOX_ID` 没有 per-sandbox 注入通道（taskTemplate 只进任务容器）。需要 sandbox 粒度审计时，由业务层在 create 时记录 sandbox↔Pod 映射 |
+| 4 | NET_ADMIN 的真实坑 | 容器默认 caps 本就不含 NET_ADMIN（实测 CapEff=`a80425fb` 位 12=0）——风险不是"忘了 drop"，而是**给 sandbox 容器加了 privileged/caps**（官方示例里 task-executor `privileged: true` 是可信组件，别照抄到用户容器）。显式 drop 属于对齐 server 行为的防御写法 |
+| 5 | Vault 必须分配后重推 | 凭据在 sidecar 内存：Pod 回收/重建即丢。use-and-burn 模式下**每次分配后**由受信面推 `POST /credential-vault`；binding host 必须与客户端实际请求形式一致且被 policy 显式 allow（见 B4） |
+| 6 | `/healthz` 不鉴权 | 探针无需带 token 头（MITM 未就绪时 503，由 failureThreshold 兜住）；官方示例带头属防御性写法 |
+| 7 | 拦截签名变化 | netpol+sidecar 叠加后，未放行出站/沙箱互访表现为 **timeout（sidecar nft drop 先拦）**；**refused 才是 netpol REJECT**。排障先查 sidecar 规则再查 netpol |
+| 8 | HTTPS 注入前置 | 镜像须信任 MITM CA（sidecar 启动时导出 `/opt/opensandbox/mitmproxy-ca-cert.pem`）；本次实测 HTTP 注入无需 |
+
+### D4. 与第 1 层 netpol 的分工
+
+- egress sidecar **只管出站**；管理面→沙箱的入站放行（task 派发、探针、server proxy）仍靠 SOP-A 的 ingress 规则，两层叠加实测不冲突。
+- fleet 共享 MITM（OSEP-0022）落地后，本节的"每 Pod 一个 sidecar"可下沉为共享形态，届时回访本文档。
+
+---
+
 ## SOP-C：排障速查
 
 | 症状 | 先查 | 工具/命令 |
@@ -174,6 +254,8 @@ auth 类型：`bearer` / `basic`（值=base64(user:pass)）/ `apiKey`（自定�
 | Vault 写入 400 | binding host 是否被 policy 显式 allow；端口字段（已废弃） | 错误消息即答案；hosts 补齐后重 PATCH |
 | Vault 注入突然停止 | sidecar 是否重启过（内存态丢失）；pause/resume | `kubectl logs -c egress` 看 mitmdump 重启；重推 vault |
 | 沙箱能改 iptables？ | 主容器 NET_ADMIN 必须被 drop | `grep CapEff /proc/self/status`（位 12） |
+| 池化 sidecar 完全不拦截 | 模板是否漏了 egress 容器 / 探针未过 / 初始规则为空 | `kubectl get pod -o jsonpath='{.spec.containers[*].name}'`；`kubectl logs -c egress`；核对 `OPENSANDBOX_EGRESS_RULES`（SOP-D D1） |
+| 拦截签名分层（netpol+sidecar 叠加） | timeout=nft drop（sidecar 先拦），refused=netpol REJECT | 先 `GET /policy` 查 sidecar 规则，再查 netpol（SOP-D D3-7） |
 
 ## 演进跟踪
 
