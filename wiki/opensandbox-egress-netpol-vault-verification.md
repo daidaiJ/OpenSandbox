@@ -311,5 +311,6 @@ vault=HTTP 200: {"bindings":[{"hosts":["mock-allow.opensandbox.svc.cluster.local
 - 机制背景：[K8s NetworkPolicy vs Egress 边车对比](opensandbox-k8s-networkpolicy-vs-egress-sidecar.md)、[Egress 网络策略调研](opensandbox-egress-network-policy.md)、[Egress 实现细节进阶参考](opensandbox-egress-internals-reference.md)
 - 相关事实：[execd 命令执行 vs K8s exec 与 egress 同 ns 隔离](opensandbox-execd-command-vs-k8s-exec-and-egress-isolation.md)
 - 落地手册：[egress 管控与 Credential Vault 最佳实践 SOP](opensandbox-egress-netpol-vault-sop.md)
+- 池化模板预置 egress sidecar 的实测（S1–S9：模板预置/动态改策略/NET_ADMIN/归因/Vault 重推/netpol 叠加）：同文档 **SOP-D**（2026-09-03 同日补测）
 - 上游文档：`docs/guides/credential-vault.md`、`components/egress/docs/mitmproxy-transparent.md`、`exporter/credential-vault-cookbook.md`
 - 跟踪上游：OSEP-0022（fleet MITM server 编排）、issue #1594（vault 持久化）、#1647（port-scoped rules）

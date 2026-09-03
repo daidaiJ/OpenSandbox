@@ -13,7 +13,7 @@
 │ controller（helm: opensandbox-controller @ opensandbox-system）│
 │   ← 管理 Pool/BatchSandbox CR，3s 轮询 task-executor           │
 ├─ 业务接入 ────────────────────────────────────────────────────┤
-│ server（无状态进程，config.toml + 外部 store）                  │
+│ server（无状态进程；store 仅存快照元数据，默认 sqlite）         │
 │   ← 业务层（认证/配额/审计）→ POST /sandboxes (poolRef)        │
 ├─ 工作负载 namespace（如 opensandbox）──────────────────────────┤
 │ Pool CR（模板 + 容量） → 预热 Pod 池                            │
@@ -64,12 +64,23 @@ helm upgrade --install opensandbox-controller <chart-dir> \
 | `[server]` | `host` / `port` / `api_key` / `max_sandbox_timeout_seconds` | 内网集群部署 `host` 监听 0.0.0.0 或 LB 地址；**生产必须设 `api_key`**（空 key 启动需显式确认，防裸奔） |
 | `[runtime]` | `type = "kubernetes"`、`execd_image` | 池化必改；`execd_image` 版本红线 ≥ v1.1.0（OSEP-0020 hooks） |
 | `[kubernetes]` | 见 2.2 | 池化核心节 |
-| `[store]` | `type = "postgresql"` + DSN | server 无状态（D-2 决策）：元数据落外部 PostgreSQL，**一个库只允许一个 server 进程写**；多副本 server 需在上游分片或按 ns 拆实例 |
+| `[store]` | 默认 sqlite，**不用配 PG** | 当前 store 只持久化**快照元数据**（池化任务负载不走快照 → 空转）；PG 是可选外部持久化、**不是多活 HA**（一个库只允许一个 server 进程）。详见 2.1.1 |
 | `[ingress]` | `mode` | 集群有 ingress 网关组件时按部署选；纯 server proxy 流量模式（业务现状）不影响池化 |
 | `[egress]` | `image` / `mode` / `readiness_timeout_seconds` | **池化默认不用 sidecar**（D-7：netpol 承担隔离），保留默认即可；敏感沙箱方案见 [egress SOP](opensandbox-egress-netpol-vault-sop.md) |
 | `[renew_intent]` | `enabled`（默认 false） | OSEP-0009 自动续约服务端开关；业务依赖"访问即续约"时必须 `enabled=true` |
 | `[storage]` | `volume_default_size` / `allowed_host_paths` | 只影响**直接创建**路径（池化卷在 Pool 模板，见卷类型文档） |
 | `[log]` | `level` | — |
+
+### 2.1.1 `[store]` 到底存了什么（无状态澄清，2026-09-03 核实）
+
+server 的持久仓储当前**只有一类资源：快照（pause/resume/commit）元数据**——`server/opensandbox_server/repositories/` 下只有 `snapshots/` 一个仓储族（sqlite / postgresql 两个后端）。沙箱、Pool、分配状态、租约在 K8s 运行时下的权威状态都在 CRD/etcd，server 进程随时可重建。**结论：D-2/D-3 的"无状态执行引擎"定位成立；池化任务型负载（D-4 不走快照）下 store 实际空转。**
+
+落地口径：
+
+- **不配 PG 完全符合官方默认**：`[store]` 默认 `type = "sqlite"`（`~/.opensandbox/opensandbox.db`），官方明说单机/单实例部署无需外部数据库即有持久化。store 没有快照写入时不产生实际数据，sqlite 文件连持久卷都可以不挂。
+- **PG 的定位是"外部托管持久化"，不是多活**：官方红线原文 "Run only one active server process against a PostgreSQL database"（快照恢复不跨 server 进程协调）。将来启用快照且要求 server 重建不丢元数据时，再按"一个 server 实例一个库"接 PG（与 D-2 每部门一实例正好对齐）。
+- **真要上 PG 的两条要点**：DSN 用环境变量 `OPENSANDBOX_STORE_POSTGRESQL_DSN` 注入（凭据不进 TOML/ConfigMap）；切换后端不迁移既有数据，切 PG 从空库开始。
+- **`memory` 后端存在但故意不设为默认**（快照元数据必须活过进程重启），不要主动改用它。
 
 ### 2.2 `[kubernetes]` 节核心键（`config.py: KubernetesRuntimeConfig`）
 

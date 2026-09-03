@@ -35,7 +35,7 @@
 | [Egress 出口管控验证报告：NetworkPolicy 池化隔离 + Credential Vault](opensandbox-egress-netpol-vault-verification.md) | ubuntu k3s 实测：netpol 池化隔离 13/13 用例、Vault 注入 V0–V9 场景（含 Host 形式不一致根因排查）、环境/镜像/权限/sidecar 全记录 | 2026-09-03 |
 | [池模式沙箱 Pod 边车组件介绍与实践指导](opensandbox-pool-sandbox-sidecar-components-guide.md) | task-executor/execd/bootstrap/Jupyter/egress 五组件职责、Pod 装配骨架、execd-as-init 拓扑、端口/认证/权限速查、避坑清单 | 2026-09-03 |
 | [K8s 池模式卷类型、配置限制与副作用实践](opensandbox-pool-mode-volumes-and-storage-practice.md) | spec 三后端（host/pvc/ossfs）支持矩阵、池化拒绝请求卷、回收策略×数据残留（Restart/Noop 泄漏坑）、RWX/RWO 副作用、S3+NAS 落地决策树 | 2026-09-03 |
-| [K8s 池模式三大部署核心配置：controller / server / Pool CR](opensandbox-pool-deploy-core-config-guide.md) | helm values→flag 映射与版本红线、server K8s 运行时配置节、Pool CR spec/status 全字段、从零到可用 checklist | 2026-09-03 |
+| [K8s 池模式三大部署核心配置：controller / server / Pool CR](opensandbox-pool-deploy-core-config-guide.md) | helm values→flag 映射与版本红线、server K8s 运行时配置节（含 `[store]` 无状态澄清：仅存快照元数据、默认 sqlite 不必配 PG）、Pool CR spec/status 全字段、从零到可用 checklist | 2026-09-03 |
 
 ## 方案设计
 
@@ -46,7 +46,7 @@
 | [OpenClaw Tool Plugin 设计方案](opensandbox-openclaw-tool-plugin-design.md) | 方式 B：官方 Tool Plugin 封装 JS SDK | 方案设计 |
 | [OpenClaw 插件对接自部署 Server 配置指南](opensandbox-openclaw-plugin-selfdeployed-server.md) | 代理模式下插件对接自部署 OpenSandbox Server | 配置指南 |
 | [池化沙箱业务会话 S3 用户目录静默同步](opensandbox-pooled-session-s3-sync-middleware.md) | 中间层静默恢复/回写；不向业务暴露 exec；固定 postStop + 内部注入脚本 | 部分实施（server） |
-| [Egress 出口管控与 Credential Vault 最佳实践 SOP](opensandbox-egress-netpol-vault-sop.md) | 企业内部署三层管控分层（netpol 基线/敏感沙箱 sidecar/未来 fleet）、SOP-A/B/C 操作步骤与陷阱清单 | 落地 SOP（已实测） |
+| [Egress 出口管控与 Credential Vault 最佳实践 SOP](opensandbox-egress-netpol-vault-sop.md) | 企业内部署三层管控分层（netpol 基线/敏感沙箱 sidecar/未来 fleet）、SOP-A/B/C/D 操作步骤与陷阱清单；**SOP-D 池化模板预置 egress sidecar（2026-09-03 实测 S1–S9）** | 落地 SOP（已实测） |
 | [池化模式故障排查 Runbook](opensandbox-pool-troubleshooting-runbook.md) | 取证命令包 + 症状对号入座（创建 4xx/429/504、不就绪、派发失败、删不掉、数据残留、限流） | 落地 Runbook |
 | [池化模式监控告警与容量水位 SOP](opensandbox-pool-monitoring-alerting-sop.md) | 池水位采集脚本（Pushgateway）、controller metrics 开启、9 条告警规则与处置联动、验收清单 | 落地 SOP |
 | [OpenSandbox 升级与版本兼容 SOP](opensandbox-upgrade-compat-sop.md) | 兼容矩阵与版本红线、五步升级顺序、灰度三件事、静默抹字段检测、回滚对照表 | 落地 SOP |
