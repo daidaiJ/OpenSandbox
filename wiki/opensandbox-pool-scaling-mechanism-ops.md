@@ -133,21 +133,21 @@ Timeout waiting for sandbox xxx to be Running with IP. Elapsed: 60.0s, Last stat
 
 ```bash
 # 完整资源（capacitySpec + status 全量）
-kubectl get pool -n p-cxmt-oa-agi <pool-name> -o yaml
+kubectl get pool -n opensandbox <pool-name> -o yaml
 
 # 关键状态一行输出（便于脚本与监控）
-kubectl get pool -n p-cxmt-oa-agi <pool-name> \
+kubectl get pool -n opensandbox <pool-name> \
   -o jsonpath='total={.status.total} allocated={.status.allocated} available={.status.available}{"\n"}'
 
 # 确认当前容量参数
-kubectl get pool -n p-cxmt-oa-agi <pool-name> \
+kubectl get pool -n opensandbox <pool-name> \
   -o jsonpath='poolMin={.spec.capacitySpec.poolMin} poolMax={.spec.capacitySpec.poolMax} bufferMin={.spec.capacitySpec.bufferMin} bufferMax={.spec.capacitySpec.bufferMax}{"\n"}'
 
 # 持续监控缓冲水位（每 2s 刷新）
-watch -n 2 'kubectl get pool -n p-cxmt-oa-agi <pool-name> -o jsonpath="{.status.total} {.status.allocated} {.status.available}{\"\n\"}"'
+watch -n 2 'kubectl get pool -n opensandbox <pool-name> -o jsonpath="{.status.total} {.status.allocated} {.status.available}{\"\n\"}"'
 ```
 
-> 提示：`kubectl get pool` 默认列已含 TOTAL / ALLOCATED / AVAILABLE / UPDATED（CRD printcolumn），直接 `kubectl get pool -n p-cxmt-oa-agi` 即可看概览，无需 jsonpath。
+> 提示：`kubectl get pool` 默认列已含 TOTAL / ALLOCATED / AVAILABLE / UPDATED（CRD printcolumn），直接 `kubectl get pool -n opensandbox` 即可看概览，无需 jsonpath。
 
 **三个字段**：
 - `total`：池子多大
@@ -155,7 +155,7 @@ watch -n 2 'kubectl get pool -n p-cxmt-oa-agi <pool-name> -o jsonpath="{.status.
 - `available`：**缓冲水位**（最该盯的）
 
 **动作日志**（控制器）：
-- 事件：`AllocationSucceeded` / `SuccessfulCreate` / `SuccessfulDelete`，用 `kubectl get events -n p-cxmt-oa-agi --field-selector involvedObject.name=<pool-name>` 看
+- 事件：`AllocationSucceeded` / `SuccessfulCreate` / `SuccessfulDelete`，用 `kubectl get events -n opensandbox --field-selector involvedObject.name=<pool-name>` 看
 - 日志：`Scale pool decision`（每轮扩缩容决策）、`Reconcile finished`（5s requeue = 有未满足分配），用 `kubectl logs -n <controller-ns> <controller-pod> | grep "Scale pool decision"` 看
 
 ## 6. 出问题怎么排查
