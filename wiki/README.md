@@ -31,6 +31,8 @@
 | [Pool 容量四参数（poolMin/poolMax/bufferMin/bufferMax）调研](opensandbox-pool-capacity-params.md) | 池模式容量参数定义、滞回伸缩算法、调参要点与边界 | 2026-08-27 |
 | [Pool 池模式扩缩容机理与延迟计算（运维手册）](opensandbox-pool-scaling-mechanism-ops.md) | 事件驱动机理、分配/扩容/缩容延迟公式与示例、参数范围表、观测与排查 | 2026-08-27 |
 | [OSEP-0020 生命周期钩子：实施状态与池模式注入路径](opensandbox-lifecycle-hooks-osep0020-status-and-injection.md) | 🚧 **正在逐步实现的上游功能**：hooks 集与执行通道、分阶段实施状态（PATCH 未实现）、task/alloc 注入链路、池模式限制与替代方案；**2026-09-01 池模式手写 CR 直注实测打通**（periodic/postStop 双路径 + 组件最小镜像矩阵） | 2026-09-01 |
+| [execd 命令执行 vs K8s exec，以及 egress 同 ns 隔离与路由前缀](opensandbox-execd-command-vs-k8s-exec-and-egress-isolation.md) | execd `/command` 与业务侧 `pods/exec` 设计/功能差异；egress 同 namespace 沙箱互隔离；FQDN 之外到不了 HTTP 路由前缀（Higress/Cilium L7） | 2026-09-03 |
+| [Egress 出口管控验证报告：NetworkPolicy 池化隔离 + Credential Vault](opensandbox-egress-netpol-vault-verification.md) | ubuntu k3s 实测：netpol 池化隔离 13/13 用例、Vault 注入 V0–V9 场景（含 Host 形式不一致根因排查）、环境/镜像/权限/sidecar 全记录 | 2026-09-03 |
 
 ## 方案设计
 
@@ -41,6 +43,7 @@
 | [OpenClaw Tool Plugin 设计方案](opensandbox-openclaw-tool-plugin-design.md) | 方式 B：官方 Tool Plugin 封装 JS SDK | 方案设计 |
 | [OpenClaw 插件对接自部署 Server 配置指南](opensandbox-openclaw-plugin-selfdeployed-server.md) | 代理模式下插件对接自部署 OpenSandbox Server | 配置指南 |
 | [池化沙箱业务会话 S3 用户目录静默同步](opensandbox-pooled-session-s3-sync-middleware.md) | 中间层静默恢复/回写；不向业务暴露 exec；固定 postStop + 内部注入脚本 | 部分实施（server） |
+| [Egress 出口管控与 Credential Vault 最佳实践 SOP](opensandbox-egress-netpol-vault-sop.md) | 企业内部署三层管控分层（netpol 基线/敏感沙箱 sidecar/未来 fleet）、SOP-A/B/C 操作步骤与陷阱清单 | 落地 SOP（已实测） |
 
 ## 参考
 
@@ -65,4 +68,9 @@ openclaw-tool-plugin-design ──┴── execd-directory-listing-limits
 egress-network-policy ──┬── k8s-networkpolicy-vs-egress-sidecar
                         └── egress-pool-higress-architecture ──┬── egress-internals-reference（附录）
                                                                 └── exporter/egress-network-policy-cookbook（落地）
+execd-command-vs-k8s-exec-and-egress-isolation ──┬── pool-allocation-time-injection（k8s exec vs taskTemplate）
+                                               └── egress-pool-higress-architecture（L7 路由前缀）
+egress-netpol-vault-verification ──┬── egress-netpol-vault-sop（落地 SOP）
+                                   ├── k8s-networkpolicy-vs-egress-sidecar（选型依据）
+                                   └── exporter/credential-vault-cookbook（Vault 机制）
 ```
