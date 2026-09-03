@@ -1,6 +1,6 @@
 # 沙箱管理高阶 API 与参数参考（快速检索）
 
-- 日期：2026-08-19
+- 日期：2026-08-19（2026-09-03 补充 GET / LIST 响应字段详解，见 §2.3.1）
 - 用途：**快速检索**业务所需能力——按"业务能力"查 API 和参数，不深入实现细节。
 - 关联：`wiki/opensandbox-create-sandbox-params-reference.md`（参数详解）、`wiki/opensandbox-task-template-user-info-injection-example.md`（注入示例）
 - 代码位置：`server/opensandbox_server/api/`、`server/opensandbox_server/api/schema.py`
@@ -74,6 +74,46 @@
 | `PATCH /sandboxes/{id}/metadata` | 修改 metadata（JSON Merge Patch） |
 | `DELETE /sandboxes/{id}` | 删除沙箱 |
 
+#### 2.3.1 GET / LIST 响应字段详解（K8s 运行时）
+
+两个接口返回**同一 `Sandbox` 结构**（`api/schema.py:653`；K8s 映射实现 `services/k8s/workload_mapper.py:_build_sandbox_from_workload`，数据源是 BatchSandbox CR）：
+
+| 字段 | 类型 | K8s 来源 | 说明 |
+|---|---|---|---|
+| `id` | string | label `opensandbox.io/id` | |
+| `status.state` | enum | CR phase / Pod 状态推导 | 见下方状态表 |
+| `status.reason` | string | — | 机器可读原因码（如 `POOL_CAPACITY_EXHAUSTED`） |
+| `status.message` | string | — | 人类可读信息 |
+| `status.lastTransitionAt` | datetime | CR creationTimestamp | K8s 实现用 CR 创建时间，非精确跳变时间 |
+| `createdAt` | datetime | CR creationTimestamp | |
+| `expiresAt` | datetime \| null | spec.expireTime | **null = 手动清理（伪永久）** |
+| `image.uri` | string \| null | pod 模板 containers[0].image | 池化沙箱返回**池模板镜像**；异常情况为 `"unknown"`；快照创建时整个字段为 null |
+| `snapshotId` | string \| null | label `opensandbox.io/snapshot-id` | |
+| `platform` | object \| null | nodeSelector/affinity 推导 | `{os, arch}`，模板没约束时为 null |
+| `metadata` | map \| null | **非 `opensandbox.io/` 前缀的 labels 回显** | 创建时 metadata 落成 labels，查询时剔除平台 label 后回显 → **可用 label 手工打标** |
+| `extensions` | map \| null | annotations 提取 + `runtime.id` 注解合并 | 含创建请求透传的 extensions |
+| `allocation` | object \| null | 池分配证据判定 | `{mode:"pool", poolRef, state:"allocated"}`，见下方判定条件 |
+| `entrypoint` | list \| null | pod 模板 containers[0].command | |
+
+**`status.state` 取值（池化场景实际会看到的）**：
+
+| state | reason | 触发条件 |
+|---|---|---|
+| `Pending` | `CREATING` | CR phase=Pending（含刚认领 Pod 阶段） |
+| `Pending` | `POOL_CAPACITY_EXHAUSTED` | **池容量不足**（PoolAllocationPending condition，message="Pool capacity is currently unavailable"）——业务层可据此重试或扩池 |
+| `Allocated` | `IP_ASSIGNED` | **池化专属过渡态**：Pod 已分到 IP 但未就绪 |
+| `Running` | `POD_READY_WITH_IP` | Pod ready + 有 IP（业务可发起调用的信号） |
+| `Failed` | `POD_PLATFORM_UNSCHEDULABLE` 等 | 不可调度 / PodFailed / 操作失败 |
+| `Terminated` | `user_delete` / `ttl_expiry` 等 | 已终止（删除后通常查询即 404） |
+
+**`allocation` 返回判定（证据完整才返回，缺一即 null）**（`workload_mapper.py:_extract_confirmed_pool_allocation`）：spec.poolRef 非空且 ≠ `"*"`、无 deletionTimestamp、finalizer `pool.sandbox.opensandbox.io/pool-allocation` 存在、`alloc-status` 注解 JSON 有效且 poolRef 匹配、pods 列表合法无重复、`status.allocated` == pods 数、`alloc-release(d)` 注解与已分配 pods 无交集。
+→ **allocation ≠ 就绪信号**：它只证明"当前确实分配在池 X 上"；可调用性看 `status.state=Running`。
+
+**注意**：
+- GET / LIST 响应**不含 `endpoints`**——端点只在 create 响应或 `GET /sandboxes/{id}/endpoints/{port}` 获取；
+- `GET /sandboxes` 过滤：`state` 多值 OR（`?state=Running&state=Pending`）；`metadata` 过滤 k=v AND（URL 编码 `?metadata=project%3DApollo`）；`page`（默认 1）/ `pageSize`（默认 20）；响应为 `{items: Sandbox[], pagination}`；
+- LIST 与 GET 走同一映射函数，单条字段含义完全一致。
+
 ### 2.4 访问沙箱
 
 | API | 说明 |
@@ -128,6 +168,29 @@
 ```
 GET /sandboxes/{id}
 ```
+
+典型响应（池化沙箱、已就绪）：
+
+```json
+{
+  "id": "sb-20260903-0001",
+  "image": { "uri": "registry.example.com/opensandbox/code-interpreter:v1.1.0" },
+  "status": {
+    "state": "Running",
+    "reason": "POD_READY_WITH_IP",
+    "message": "Pod is ready with IP (1/1 ready)",
+    "lastTransitionAt": "2026-09-03T02:00:00Z"
+  },
+  "metadata": { "project": "apollo", "user_id": "u-123" },
+  "extensions": { "poolRef": "my-pool", "runtime.id": "..." },
+  "allocation": { "mode": "pool", "poolRef": "my-pool", "state": "allocated" },
+  "entrypoint": ["/opt/opensandbox/bootstrap.sh"],
+  "expiresAt": "2026-09-03T02:10:00Z",
+  "createdAt": "2026-09-03T02:00:00Z"
+}
+```
+
+字段含义见 §2.3.1；`allocation=null` 常见于：非池化沙箱、池已释放（归还中）、CR 正在删除。
 
 ### 场景 C：手动续约
 
