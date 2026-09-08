@@ -54,6 +54,7 @@
 | [池化模式监控告警与容量水位 SOP](opensandbox-pool-monitoring-alerting-sop.md) | 池水位采集脚本（Pushgateway）、controller metrics 开启、9 条告警规则与处置联动、验收清单 | 落地 SOP |
 | [OpenSandbox 升级与版本兼容 SOP](opensandbox-upgrade-compat-sop.md) | 兼容矩阵与版本红线、五步升级顺序、灰度三件事、静默抹字段检测、回滚对照表 | 落地 SOP |
 | [池化模式容量规划与压测 SOP](opensandbox-capacity-planning-and-loadtest-sop.md) | 密度画像方法、create 延迟账、三场景压测（含脚本骨架）、capacitySpec 反推配法 | 方法论（数值待实测） |
+| [隔离会话池化落地最佳实践 SOP](opensandbox-isolated-sessions-pool-mode-best-practices-sop.md) | 场景决策表、隔离池部署验收清单（四前置+smoke）、业务接入与会话生命周期规范（SDK 模板+错误语义表）、run 编码规范（exit/超时/env/大输出）、监控告警与故障 runbook、反模式清单与基线速查 | 落地 SOP（已实测） |
 | [池化沙箱日志与产物留存方案](opensandbox-pool-log-artifact-retention.md) | 既定路线：hostPath+日志易采日志、agent CLI 直推 S3 产物；目录规范、凭据注入、清理与验收 | 落地方案 |
 | [K8s 池模式（无 pause/resume）文档覆盖度回顾与优先级建议](opensandbox-pool-mode-wiki-gap-analysis-and-roadmap.md) | 盘点 wiki 32 篇 + exporter 8 cookbook 已覆盖面；缺口清单 P0（Runbook/监控告警/升级 SOP）/P1（容量压测/日志留存/安全加固/多部门接入）/P2 与落地节奏 | 规划建议 |
 
@@ -89,7 +90,8 @@ pool-sandbox-sidecar-components-guide ──┬── pool-deploy-core-config-gu
                                         ├── pool-mode-volumes-and-storage-practice（模板卷选型与残留坑）
                                         └── sandbox-config-and-env-reference（env 全集）
 pool-mode-wiki-gap-analysis-and-roadmap ──（盘点全量 wiki + exporter cookbook，运维层缺口规划）
-isolated-sessions-pool-mode-enable-and-assessment ──┬── isolation-sessions.md（官方指南，实测一致）
+isolated-sessions-pool-mode-enable-and-assessment ──┬── isolated-sessions-pool-mode-best-practices-sop（落地 SOP）
+                                                    ├── isolation-sessions.md（官方指南，实测一致）
                                                     ├── pool-sandbox-sidecar-components-guide（Pod 装配）
                                                     └── k8s-networkpolicy-vs-egress-sidecar（网络隔离选型）
 ```

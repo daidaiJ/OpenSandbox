@@ -5,7 +5,7 @@ description: ubuntu k3s 实测：池化路径启用 execd /v1/isolated 的完整
 
 # 池模式启用隔离会话：配置配方、场景边界、得失比对与生产评估
 
-> 日期：2026-09-08。环境：ubuntu k3s 双节点（10.254.254.105 master / 103 worker，k3s v1.30.5，内核 6.17.0-14），server `latest`（NodePort 30809，batchsandbox provider），execd `v1.1.0` 与 `latest`（2026-09-06 构建）双版本实测。全部结论均有实测证据，测试方法与完整证据见 §8。
+> 日期：2026-09-08。配套落地手册：[隔离会话池化落地最佳实践 SOP](opensandbox-isolated-sessions-pool-mode-best-practices-sop.md)（决策表、部署验收、SDK 接入模板、编码规范、runbook）。本报告侧重"边界是什么、为什么"；SOP 侧重"该怎么做"。环境：ubuntu k3s 双节点（10.254.254.105 master / 103 worker，k3s v1.30.5，内核 6.17.0-14），server `latest`（NodePort 30809，batchsandbox provider），execd `v1.1.0` 与 `latest`（2026-09-06 构建）双版本实测。全部结论均有实测证据，测试方法与完整证据见 §8。
 
 ## 0. TL;DR
 
