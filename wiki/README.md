@@ -36,6 +36,7 @@
 | [池模式沙箱 Pod 边车组件介绍与实践指导](opensandbox-pool-sandbox-sidecar-components-guide.md) | task-executor/execd/bootstrap/Jupyter/egress 五组件职责、Pod 装配骨架、execd-as-init 拓扑、端口/认证/权限速查、避坑清单 | 2026-09-03 |
 | [K8s 池模式卷类型、配置限制与副作用实践](opensandbox-pool-mode-volumes-and-storage-practice.md) | spec 三后端（host/pvc/ossfs）支持矩阵、池化拒绝请求卷、回收策略×数据残留（Restart/Noop 泄漏坑）、RWX/RWO 副作用、S3+NAS 落地决策树 | 2026-09-03 |
 | [K8s 池模式三大部署核心配置：controller / server / Pool CR](opensandbox-pool-deploy-core-config-guide.md) | helm values→flag 映射与版本红线、server K8s 运行时配置节（含 `[store]` 无状态澄清：仅存快照元数据、默认 sqlite 不必配 PG）、Pool CR spec/status 全字段、从零到可用 checklist | 2026-09-03 |
+| [池模式启用隔离会话：配置配方、场景边界、得失比对与生产评估](opensandbox-isolated-sessions-pool-mode-enable-and-assessment.md) | ubuntu k3s 实测：池模板启用 bwrap 隔离四前置（bwrap/session-gate/SYS_ADMIN+NET_ADMIN/upper）、与 /command 及 native /session 三通道比对、得失表；**结论：有条件可生产**（binds 损坏、超时杀会话、配额仅分配时等规避集 + 独立池 checklist） | 2026-09-08 |
 
 ## 方案设计
 
@@ -86,4 +87,7 @@ pool-sandbox-sidecar-components-guide ──┬── pool-deploy-core-config-gu
                                         ├── pool-mode-volumes-and-storage-practice（模板卷选型与残留坑）
                                         └── sandbox-config-and-env-reference（env 全集）
 pool-mode-wiki-gap-analysis-and-roadmap ──（盘点全量 wiki + exporter cookbook，运维层缺口规划）
+isolated-sessions-pool-mode-enable-and-assessment ──┬── isolation-sessions.md（官方指南，实测一致）
+                                                    ├── pool-sandbox-sidecar-components-guide（Pod 装配）
+                                                    └── k8s-networkpolicy-vs-egress-sidecar（网络隔离选型）
 ```
