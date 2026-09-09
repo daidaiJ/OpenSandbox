@@ -240,7 +240,7 @@ spec:
 
 ### 6.3 建议跟进（上游）
 
-1. ~~`binds` gate 握手 EOF~~ **初判"binds 损坏"有误，已在 [#1772](https://github.com/opensandbox-group/OpenSandbox/issues/1772) 更正**：指南契约要求 dest 预建于镜像（e2e 测试也先 mkdir dest，注释原文 "bwrap binds onto an existing dir; it cannot create one under the read-only root"），契约内功能正常（实证）。仍保留的缺陷是**缺 dest 校验 + 失败模式不透明**（报 gate EOF 而非指明 dest 不存在的 4xx），issue 已改提这两点。业务侧优先 `extra_writable` 的建议不变（无需预建、回写已验证）。
+1. ~~`binds` gate 握手 EOF~~ **初判"binds 损坏"有误，[#1772](https://github.com/opensandbox-group/OpenSandbox/issues/1772) 已自行关闭**：指南契约要求 dest 预建于镜像（e2e 测试也先 mkdir dest，注释原文 "bwrap binds onto an existing dir; it cannot create one under the read-only root"），契约内功能正常（实证），issue 关闭前已留校验建议供上游参考。业务侧优先 `extra_writable` 的建议不变（无需预建、回写已验证）。
 2. ~~写时配额缺失~~ **已提 issue [#1773](https://github.com/opensandbox-group/OpenSandbox/issues/1773)**：`upper_max_bytes` 仅在 `UpperManager.Allocate()` 做总量检查（filepath.Walk），运行中会话写入无任何上限，超限后新会话全部被拒。
 3. idle GC 清扫周期与可观测性（`idle_remaining:0` 与实际回收之间的窗口缺指标）。
 4. fs proxy upload 运行时用例补齐（当前仅代码层确认）。
