@@ -11,8 +11,8 @@ description: ubuntu k3s 实测：池化路径启用 execd /v1/isolated 的完整
 
 1. **池模式可以启用隔离会话**，但 server 的 `bootstrap.execd.isolation=enable` 扩展**只对直连创建路径生效**；池化 Pod 由池模板预热，**必须把隔离能力静态写进池模板**（§2.1）。配方 = 四个前置：bwrap 二进制 + session-gate + SYS_ADMIN/NET_ADMIN + upper 目录（§2.2/§2.3）。
 2. **适用场景**：不可信/半可信代码执行、同一沙箱多会话文件互隔离（CoW 可丢弃工作区）、防误伤（rm 级破坏不伤沙箱本体）。**不改变租户间隔离**——那是"每租户一沙箱 Pod"的职责（§3）。
-3. **得失**：得到 Pod 内命名空间级隔离 + overlay 快丢工作区 + 秘密黑名单兜底；付出 Pod 安全基线下调（SYS_ADMIN/NET_ADMIN + seccomp/apparmor unconfined）、会话生命周期脆弱（`exit`/超时都会杀会话）、`binds` 不可用、非 root uid 写入受限、配额半残、运维复杂度（§5）。
-4. **生产评估：有条件可生产**。核心功能面（overlay 工作区、profile、env 三层、allowlist 防逃逸、网络隔离、后台 run、fs proxy 读）实测可用；但必须执行规避集（不用 `binds`/非 root uid/diff-commit/写时配额），且**隔离池独立建池**。给出发布前 checklist（§6）。
+3. **得失**：得到 Pod 内命名空间级隔离 + overlay 快丢工作区 + 秘密黑名单兜底；付出 Pod 安全基线下调（SYS_ADMIN/NET_ADMIN + seccomp/apparmor unconfined）、会话生命周期脆弱（`exit`/超时都会杀会话）、binds 需镜像预建 dest 且校验缺失、非 root uid 写入受限、配额仅分配时检查、运维复杂度（§5）。
+4. **生产评估：有条件可生产**。核心功能面（overlay 工作区、profile、env 三层、allowlist 防逃逸、网络隔离、后台 run、fs proxy 读、契约内的 binds）实测可用；但必须执行规避集（binds dest 预建或改用 extra_writable/非 root uid/diff-commit/写时配额），且**隔离池独立建池**。给出发布前 checklist（§6）。
 
 ---
 
@@ -144,7 +144,7 @@ spec:
 
 - **租户间隔离**：隔离会话在同一个 Pod 里，不是跨 Pod 边界。多租户强隔离仍然必须"每租户独立沙箱 Pod + NetworkPolicy"，隔离会话只是**沙箱内部**的纵深。
 - **可信固定负载**（预装环境的常规任务）：没有收益，只付成本，直接用普通执行通道。
-- **需要宿主目录双向同步**：`binds` 当前不可用（§4）。
+- **需要宿主目录双向同步**：`binds` 可用但 dest 必须预建于镜像（契约）；未预建会得到不透明的 gate EOF（[#1772](https://github.com/opensandbox-group/OpenSandbox/issues/1772)）。图省事用 `extra_writable`。
 - **非 root 运行工作负载**：setpriv 切 uid 后 overlay 工作区不可写（§4）。
 
 ### 4. 能力边界实测矩阵
@@ -176,7 +176,7 @@ spec:
 | share_net:false（仅 SYS_ADMIN） | ❌→✅ | 创建即 `gate: unixpacket EOF`；根因 bwrap 新 netns 配 lo 需 `CAP_NET_ADMIN`；**池模板加 NET_ADMIN 后完全可用**（仅 lo、DNS 失败） |
 | extra_writable 白名单 | ✅ | 白名单外（/etc）创建即拒 `not in allowlist`；白名单内可写且**真实回写主容器**（wb.txt 主容器可见） |
 | **symlink 逃逸防护** | ✅ | `extra_writable:["/tmp/osb-extra/escape"]`（→/etc 的软链）创建即拒；binds 同样被拦（先 EvalSymlinks 再校验） |
-| **binds（显式 bind 挂载）** | ❌ | v1.1.0 与 latest 均复现：创建即 `wait for isolated workload identity: read unixpacket EOF`（gate 握手断裂，非环境问题）；源不存在时有干净的校验报错。**规避：用 extra_writable（已验证回写）** |
+| **binds（显式 bind 挂载）** | ⚠️ 契约内可用 | **指南契约：dest 必须预建于镜像**（`docs/guides/isolation-sessions.md`："dest must already exist inside the namespace"；e2e 测试也先 `mkdir -p dest` 并注明 bwrap 无法在只读根上创建）。初测用不存在的 dest → `bwrap: Can't mkdir ...: Read-only file system` → gate EOF（实证）；dest 预建后功能正常（实证 dest=/tmp 挂载成功）。真缺陷是**缺 dest 校验 + 报错不透明**，已提 [#1772](https://github.com/opensandbox-group/OpenSandbox/issues/1772)。业务侧仍建议优先 `extra_writable`（无需预建、回写已验证） |
 | upper_max_bytes 配额 | ⚠️ 语义特殊 | **分配时**对 upper 根目录总量检查（upper 满 → 所有新会话创建失败 `total usage exceeds configured limit`）；**写入时不强制**（45MB dd 进 32MiB 上限的 upper 成功）——写时 ENOSPC 依赖 fs project quota（本节点 ext4 `rw,relatime` 无 prjquota，静默失效） |
 | fs proxy 文件面 | ✅/⚠️ | `files/info`、`files/download` 实测穿透 upper 层取到会话文件；`files/upload` 代码确认需 `metadata`（JSON）+ `file` 双 part（与 execd /files 同 schema），运行时未跑通用例 |
 | diff/commit | ❌ | 503 `NOT_SUPPORTED (phase 2)`；capabilities `commit_supported/diff_supported:false`（Phase 2 未落地） |
@@ -215,7 +215,7 @@ spec:
 |---|---|
 | 不可信代码执行成为可能（只读根 + CoW 工作区 + 防逃逸白名单） | **Pod 安全基线下调**：SYS_ADMIN + NET_ADMIN + seccomp/apparmor Unconfined——隔离会话保护的是"会话不伤沙箱"，代价是沙箱 Pod 自身暴露面变大 |
 | 秘密黑名单兜底（`*_API_KEY/*_TOKEN` 自动剥除） | 会话生命周期脆弱：`exit`、前台超时都会销毁会话，业务必须有重建语义 |
-| 多会话互隔离 + 会话级工件回收（upper 随会话生灭） | `binds` 不可用；非 root uid 写 overlay 受限；diff/commit（增量工件导出）未实现 |
+| 多会话互隔离 + 会话级工件回收（upper 随会话生灭） | 非 root uid 写 overlay 受限；diff/commit（增量工件导出）未实现；binds dest 需镜像预建 |
 | 网络可选收口（share_net:false） | 配额仅"分配时"检查，写时硬限依赖节点 fs prjquota；upper 打满会阻塞新会话 |
 | fail-closed：没配好就明确拒绝，不会半开 | 运维面增加：独立池、镜像内二进制拷贝、upper 用量监控、NET_ADMIN 的安全评估 |
 
@@ -224,7 +224,7 @@ spec:
 ### 6.1 分级结论
 
 - **✅ 可直接生产**（实测通过）：overlay/rw/ro 工作区、strict/balanced profile、env 三层+黑名单、allowlist+symlink 防逃逸、share_net 网络隔离（配 NET_ADMIN）、后台 run 全生命周期、同会话串行化、capabilities fail-closed、fs proxy 读/下载、native 会话共存、idle GC、会话显式删除。
-- **⚠️ 规避后可用**：`exit`/超时杀会话 → 业务侧一律 `bash -c` 包装 + 超时即重建；uid≠0 → 镜像内预 chown 工作区或保持 uid 0；`binds` → 用 `extra_writable`（已验证回写）替代；配额 → 当作"分配闸门"而非"写入硬限"，配监控。
+- **⚠️ 规避后可用**：`exit`/超时杀会话 → 业务侧一律 `bash -c` 包装 + 超时即重建；uid≠0 → 镜像内预 chown 工作区或保持 uid 0；`binds` → dest 预建于镜像（契约）或用 `extra_writable`（已验证回写）替代；配额 → 当作"分配闸门"而非"写入硬限"，配监控。
 - **❌ 当前缺失，不要依赖**：diff/commit（Phase 2）、userns uid 模式（内核限制）、写时 ENOSPC 硬限（需 fs prjquota）、后台日志超 16MiB 保留。
 
 ### 6.2 上生产前的 checklist
@@ -240,7 +240,7 @@ spec:
 
 ### 6.3 建议跟进（上游）
 
-1. ~~`binds` gate 握手 EOF~~ **已定位根因并提 issue [opensandbox-group/OpenSandbox#1772](https://github.com/opensandbox-group/OpenSandbox/issues/1772)**：argv 先 `--ro-bind / /` 把根挂只读，bwrap 为不存在的 dest mkdir 挂载点时 EROFS 退出 → gate EOF。dest 已存在或父目录在先挂的 tmpfs 下则正常——`extra_writable`（dest==source 恒存在）不受影响，替代方案成立。
+1. ~~`binds` gate 握手 EOF~~ **初判"binds 损坏"有误，已在 [#1772](https://github.com/opensandbox-group/OpenSandbox/issues/1772) 更正**：指南契约要求 dest 预建于镜像（e2e 测试也先 mkdir dest，注释原文 "bwrap binds onto an existing dir; it cannot create one under the read-only root"），契约内功能正常（实证）。仍保留的缺陷是**缺 dest 校验 + 失败模式不透明**（报 gate EOF 而非指明 dest 不存在的 4xx），issue 已改提这两点。业务侧优先 `extra_writable` 的建议不变（无需预建、回写已验证）。
 2. ~~写时配额缺失~~ **已提 issue [#1773](https://github.com/opensandbox-group/OpenSandbox/issues/1773)**：`upper_max_bytes` 仅在 `UpperManager.Allocate()` 做总量检查（filepath.Walk），运行中会话写入无任何上限，超限后新会话全部被拒。
 3. idle GC 清扫周期与可观测性（`idle_remaining:0` 与实际回收之间的窗口缺指标）。
 4. fs proxy upload 运行时用例补齐（当前仅代码层确认）。
