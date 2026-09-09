@@ -5,15 +5,16 @@
 | 现象 | Pool 模式压测中销毁的池 pod 持续多于 running，伴随 20-30 个 pod 长期 Pending |
 | 环境 | poolMin=20 / poolMax=400 / bufferMin=4 / bufferMax=40；池模板 2c4G；namespace 配额余量 900c；13 个候选节点（nodeAffinity + 污点容忍）；压测 30min、负载按 40 一档递增至 ~100 并发 |
 | 日期 | 2026-09-10 |
-| 状态 | 删除侧因果链已闭环（代码级定位）；调度侧 Pending 根因待一条 jsonpath 输出收口 |
+| 状态 | 删除侧因果链已闭环（终态数据 293 销毁 / 193 Running 峰值与模型吻合）；调度侧 Pending 根因待一条 jsonpath 输出收口 |
 | 涉及代码 | `kubernetes/internal/controller/pool_controller.go`（scalePool / pickPodsToDelete）、`allocator.go`（getAvailablePodsFromAlloc）、`internal/utils/pod.go`（ComparePodsForDeletion） |
 
 ## 一、现象清单
 
-1. **销毁的池 pod 比 running 多**，约 1.5:1；水位刚到 1/3（~40 并发）时就开始反超，持续累积到 150+。
+1. **销毁的池 pod 比 Running 的多**：终态峰值销毁累计 **293**、Running 阶段 pod 峰值 **193**（293:193 = 1.52，与初测"约 1:1.5"吻合）；水位刚到 1/3（~40 并发）时就开始反超。
 2. **20-30 个 pod 长期 Pending**，与销毁同时出现。
 3. running pod 集中在 13 个候选节点中的 6 个；强行给池模板加 pod 反亲和打散到 13 台后，就绪速度不变（6-10s）。
 4. 控制器日志快照（~100 并发时采样）：`maxNewPods=272`、`desiredSchedulableCnt=121`、`totalPodCnt=128`。
+5. 负载 sandbox 并发 ~100，Running 阶段 pod 却达 193——**峰值池内约 90 个多余 pod**；全程创建 ≈ 293 销毁 + 期末存活 ~130 ≈ **420 个 pod**，实际需要 ~100-130 个，**约 70% 的创建是垃圾 churn**。
 
 ## 二、快照反推（关键证据）
 
@@ -40,6 +41,8 @@
 **循环全貌**：创建 → 调度不上（Pending）→ 计入 buffer → buffer>40 触发 trim → 最老优先删掉 → 预算回血 → 再创建 → 再 Pending。稳态运转下销毁累计自然远超 running。
 
 **20-30 Pending = 25% 预算平衡点**：desired≈120 → 预算≈30，控制器创建到 notReady 顶线即停，与观测精确吻合。卡死 pod 还永久吃掉预算（budget = 25%×desired − notReady ≈ 5），池子连正常补货都做不动，只在 trim 后瞬间回血——这就是 supply>0 与删除并存、池子"冻住"的原因。
+
+**终态数据量纲核对**：波幅与累计销毁均可由本模型复现——每波 40 的突增使 supply 尖峰 → desired 被抬高 → 按 25% 预算超建 → pod 就绪时 supply 已回落 → desired 坍缩 → 单次 scaleIn 50-90 的集中删除；3-4 波累计 ≈ 293 销毁。trim 单独即可解释全部销毁，无需引入 sandbox 周转（与"非 TTL"观测一致）；自噬机器全程平均吞吐 ~10 pod/分钟。Running 峰值 193 ≈ 1.9× sandbox 负载（~100），峰值的 ~90 个多余 pod 即 trim 的主要目标。
 
 ## 四、已排除项
 
