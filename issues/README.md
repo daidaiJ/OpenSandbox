@@ -6,5 +6,5 @@
 
 | 文档 | 主题 | 日期 / 状态 |
 |---|---|---|
-| [2026-09-10-pool-pending-scalein-churn.md](2026-09-10-pool-pending-scalein-churn.md) | Pool 压测销毁风暴：Pending → scale-in 自噬循环（buffer 口径含未 Ready pod + trim 无就绪门控最老优先） | 2026-09-10 / 根因已定位，待收口调度侧 message 与修复实施 |
+| [2026-09-10-pool-pending-scalein-churn.md](2026-09-10-pool-pending-scalein-churn.md) | Pool 压测销毁风暴：Pending → scale-in 自噬循环（buffer 口径含未 Ready pod + trim 无就绪门控最老优先）；终态 293 销毁 / 193 Running 峰值与模型吻合 | 2026-09-10 / 删除侧已闭环，待收口调度侧 message 与修复实施 |
 | [2026-09-10-recycle-strategy-comparison.md](2026-09-10-recycle-strategy-comparison.md) | recycleStrategy 对比：默认 Delete 的周转删除流、Restart 的隔离缺口（emptyDir/IP）与切换前置 | 2026-09-10 / 结论固化 |
