@@ -5,7 +5,7 @@
 | 现象 | Pool 模式压测中销毁的池 pod 持续多于 running，伴随 20-30 个 pod 长期 Pending |
 | 环境 | poolMin=20 / poolMax=400 / bufferMin=4 / bufferMax=40；池模板 2c4G；namespace 配额余量 900c；13 个候选节点（nodeAffinity + 污点容忍）；压测 30min、负载按 40 一档递增至 ~100 并发 |
 | 日期 | 2026-09-10 |
-| 状态 | 删除侧因果链已闭环（终态数据 293 销毁 / 193 Running 峰值与模型吻合）；调度侧 Pending 根因待一条 jsonpath 输出收口 |
+| 状态 | 删除侧因果链已闭环（终态数据 293 销毁 / 193 Running 峰值与模型吻合；时间序列四阶段与公式互证）；调度侧 Pending 根因待一条 jsonpath 输出收口 |
 | 涉及代码 | `kubernetes/internal/controller/pool_controller.go`（scalePool / pickPodsToDelete）、`allocator.go`（getAvailablePodsFromAlloc）、`internal/utils/pod.go`（ComparePodsForDeletion） |
 
 ## 一、现象清单
@@ -43,6 +43,14 @@
 **20-30 Pending = 25% 预算平衡点**：desired≈120 → 预算≈30，控制器创建到 notReady 顶线即停，与观测精确吻合。卡死 pod 还永久吃掉预算（budget = 25%×desired − notReady ≈ 5），池子连正常补货都做不动，只在 trim 后瞬间回血——这就是 supply>0 与删除并存、池子"冻住"的原因。
 
 **终态数据量纲核对**：波幅与累计销毁均可由本模型复现——每波 40 的突增使 supply 尖峰 → desired 被抬高 → 按 25% 预算超建 → pod 就绪时 supply 已回落 → desired 坍缩 → 单次 scaleIn 50-90 的集中删除；3-4 波累计 ≈ 293 销毁。trim 单独即可解释全部销毁，无需引入 sandbox 周转（与"非 TTL"观测一致）；自噬机器全程平均吞吐 ~10 pod/分钟。Running 峰值 193 ≈ 1.9× sandbox 负载（~100），峰值的 ~90 个多余 pod 即 trim 的主要目标。
+
+**时间序列互证（实测：100 running 前一切正常 → 忽然大量销毁 → 然后 Pending → running 冻结）**：四段观测与公式逐段吻合——
+1. **爬坡期（supply>0）trim 在数学上不可能发生**：`scaleIn>0 ⟺ buffer > supply + desiredBuffer`，爬坡期每波 supply≈40 而 buffer≤40，不等式恒不成立——"100 之前好好的"是不等式的必然结果；
+2. **最后一波被吸收的瞬间（supply→0）**：desired 从峰值坍缩到 allocated+22；total≈190 / allocated≈100 时 buffer≈90>40 → **一次性 scaleIn≈68**，全程最大单波删除恰好发生在爬坡顶点（"忽然大量销毁"）；
+3. **trim 清空 notReady → 预算满血 → 单轮 burst ~25-30 创建**，撞上容量/调度墙（"然后 Pending"）。补充假设：被删 68 pod 释放的 ~136c 在重建间隙被共享节点的邻居租户占用，池子无法回到 193；
+4. **卡死 Pending 永久占用 25% 预算**（budget≈30−25≈5）→ 创建近乎停摆（"running 停在那里"）；残余低烈度 churn（偶发 trim 最老卡死 pod → 预算回血 → 再建 → 再卡）以 ~10 pod/分钟 累积 293 长尾。
+
+由此形态定性为**四段振荡**：爬坡超建 → 顶点单波坍缩 → 重建 burst 撞墙 → 冻结低烧。修复映射：P0 trim 门控消掉第 2 段大波，P1 buffer 口径修正消掉第 4 段低烧。
 
 ## 四、已排除项
 
