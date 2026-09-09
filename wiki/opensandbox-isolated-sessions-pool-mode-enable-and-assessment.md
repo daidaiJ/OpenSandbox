@@ -240,8 +240,8 @@ spec:
 
 ### 6.3 建议跟进（上游）
 
-1. `binds` gate 握手 EOF（v1.1.0 与 latest 均复现）——向上游报 issue，附最小复现（本报告 §8 环境可复现）。
-2. 写时配额依赖 fs prjquota 的**静默失效**建议上游文档化/启动时探测告警。
+1. ~~`binds` gate 握手 EOF~~ **已定位根因并提 issue [opensandbox-group/OpenSandbox#1772](https://github.com/opensandbox-group/OpenSandbox/issues/1772)**：argv 先 `--ro-bind / /` 把根挂只读，bwrap 为不存在的 dest mkdir 挂载点时 EROFS 退出 → gate EOF。dest 已存在或父目录在先挂的 tmpfs 下则正常——`extra_writable`（dest==source 恒存在）不受影响，替代方案成立。
+2. ~~写时配额缺失~~ **已提 issue [#1773](https://github.com/opensandbox-group/OpenSandbox/issues/1773)**：`upper_max_bytes` 仅在 `UpperManager.Allocate()` 做总量检查（filepath.Walk），运行中会话写入无任何上限，超限后新会话全部被拒。
 3. idle GC 清扫周期与可观测性（`idle_remaining:0` 与实际回收之间的窗口缺指标）。
 4. fs proxy upload 运行时用例补齐（当前仅代码层确认）。
 

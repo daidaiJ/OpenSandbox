@@ -61,9 +61,9 @@ curl -s -X DELETE $B/v1/isolated/session/$SID -o /dev/null -w '%{http_code}\n'  
 | `context deadline exceeded` | 前台 run 超时 | **会话已销毁**，重建会话，不要重试 run |
 | `session process exited without end marker` | run 代码里裸 `exit` | 会话已销毁，重建；代码按 SOP-C C1 改写 |
 | `SESSION_NOT_FOUND` (404) | 会话死/被 idle 回收/被删 | 按"无此会话"重建；attach 前先探 |
-| `total usage exceeds configured limit` | upper 全局配额打满 | 告警级故障：重建池 Pod 清 upper，见 SOP-D |
+| `total usage exceeds configured limit` | upper 全局配额打满（分配时检查语义，见 [#1773](https://github.com/opensandbox-group/OpenSandbox/issues/1773)） | 告警级故障：重建池 Pod 清 upper，见 SOP-D |
 | `... not in allowlist` | extra_writable 越界（含 symlink 解析后） | 修正路径，不要绕 |
-| `gate: unixpacket EOF` | binds 缺陷或缺 NET_ADMIN | 弃用 binds；查 caps |
+| `gate: unixpacket EOF` | **binds dest 不存在的已知缺陷**（[#1772](https://github.com/opensandbox-group/OpenSandbox/issues/1772)：根只读后 bwrap mkdir 失败）或缺 NET_ADMIN | 弃用 binds；查 caps |
 
 **B4 Python SDK 接入模板**（模型齐全，`sandbox.isolation` 入口）：
 
