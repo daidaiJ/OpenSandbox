@@ -14,7 +14,8 @@ description: 基于 ubuntu k3s 实测的隔离会话（execd /v1/isolated）落�
 | 要在沙箱里跑**用户提交/AI 生成的代码** | ✅ 用隔离会话（只读根 + CoW 工作区 + 白名单） |
 | 怕脚本**误伤沙箱本体**（rm/覆盖系统目录） | ✅ 用隔离会话，破坏半径锁定在会话 upper |
 | 需要**同沙箱多会话文件互隔离**、可丢弃工作区 | ✅ 用隔离会话 |
-| 需要**写时磁盘硬限额**或**bind 挂载宿主目录** | ❌ 当前不可用（配额仅分配时检查、binds 损坏），先规避 |
+| 需要**写时磁盘硬限额** | ❌ 配额仅分配时检查（[#1773](https://github.com/opensandbox-group/OpenSandbox/issues/1773)），先规避 |
+| 需要 **bind 挂载宿主目录** | ⚠️ binds 契约要求 dest 预建于镜像（指南明文）；未预建会得到不透明报错（[#1772](https://github.com/opensandbox-group/OpenSandbox/issues/1772)）。多数场景用 `extra_writable` 更省事 |
 | 只是可信的固定任务（预装环境跑作业） | ❌ 用普通 `/command`，不值得付成本 |
 | 想**替代每租户一沙箱**做租户隔离 | ❌ 隔离会话是 Pod 内纵深，不改变租户边界 |
 | 沙箱 Pod 需要维持最小攻击面（不能加 SYS_ADMIN） | ❌ 隔离池会下调 Pod 基线，评估后再开 |
@@ -46,7 +47,7 @@ curl -s -X POST $B/v1/isolated/session/$SID/run -d '{"code":"bash -c \"echo ok >
 curl -s -X DELETE $B/v1/isolated/session/$SID -o /dev/null -w '%{http_code}\n'   # 期望 200
 ```
 
-**A6 明确不做**：不依赖 `binds`（当前版本 gate EOF，用 `extra_writable` 替代，已验证回写）；不启用 `uid_mode:"userns"`（Ubuntu 24.04 userns 受限）；不指望写时 ENOSPC 硬限（依赖节点 fs prjquota）。
+**A6 明确不做**：`binds` 的 dest **必须预建于镜像**（指南契约；未预建会得到不透明 gate EOF，见 [#1772](https://github.com/opensandbox-group/OpenSandbox/issues/1772)）——拿不准就用 `extra_writable`（已验证回写）；不启用 `uid_mode:"userns"`（Ubuntu 24.04 userns 受限）；不指望写时 ENOSPC 硬限（依赖节点 fs prjquota）。
 
 ## SOP-B：业务接入与会话生命周期
 
@@ -63,7 +64,7 @@ curl -s -X DELETE $B/v1/isolated/session/$SID -o /dev/null -w '%{http_code}\n'  
 | `SESSION_NOT_FOUND` (404) | 会话死/被 idle 回收/被删 | 按"无此会话"重建；attach 前先探 |
 | `total usage exceeds configured limit` | upper 全局配额打满（分配时检查语义，见 [#1773](https://github.com/opensandbox-group/OpenSandbox/issues/1773)） | 告警级故障：重建池 Pod 清 upper，见 SOP-D |
 | `... not in allowlist` | extra_writable 越界（含 symlink 解析后） | 修正路径，不要绕 |
-| `gate: unixpacket EOF` | **binds dest 不存在的已知缺陷**（[#1772](https://github.com/opensandbox-group/OpenSandbox/issues/1772)：根只读后 bwrap mkdir 失败）或缺 NET_ADMIN | 弃用 binds；查 caps |
+| `gate: unixpacket EOF` | binds dest 未预建（契约外使用；根只读后 bwrap mkdir 失败，校验缺失导致报错不透明，见 [#1772](https://github.com/opensandbox-group/OpenSandbox/issues/1772)）或缺 NET_ADMIN | 镜像里预建 dest 或改用 extra_writable；查 caps |
 
 **B4 Python SDK 接入模板**（模型齐全，`sandbox.isolation` 入口）：
 
@@ -142,7 +143,7 @@ await session.delete()
 1. ❌ 普通池加 caps 混用隔离（基线拉低面扩大，应独立池）
 2. ❌ run 代码裸 `exit`（杀会话 P0）
 3. ❌ 超时后重试 run（会话已死，重建才是对的）
-4. ❌ 依赖 `binds`/`diff`/`commit`/`userns`/写时配额（当前全部不可用）
+4. ❌ 依赖 `diff`/`commit`/`userns`/写时配额（当前全部不可用）；binds 不预建 dest 就用（契约要求预建，违反时报错不透明）
 5. ❌ 凭据放容器 env 指望黑名单（兜底当设计）
 6. ❌ allow 模式不传 PATH（会话内命令全瞎）
 7. ❌ 大日志刷 stdout（16MiB 截断丢数据）
