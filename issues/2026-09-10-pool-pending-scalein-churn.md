@@ -104,15 +104,18 @@ spec:
 3. `SuccessfulDelete` 计数 vs `Allocate action ... toRelease` 计数分离，确认删除构成；
 4. Pending pod 的 conditions message 按第五节判读归档。
 
-## 九、验证结果（2026-09-10 k3s 双节点 A/B，已闭环）
+## 九、验证结果（2026-09-10 k3s 双节点 A/B；当日复盘修正 + 后侧重测，已闭环）
 
-在 ubuntu 双节点 k3s 上以 `0d82d87b^`（前）vs `0d82d87b`（PR #1425，后）controller 镜像做同需求对照（400 创建请求、同池规格、基座 alloc≈99/98）：**前坏后好，本 fork 应合 #1425**。完整报告见 [wiki/opensandbox-pr1425-k3s-ab-verification.md](../wiki/opensandbox-pr1425-k3s-ab-verification.md)。要点：
+在 ubuntu 双节点 k3s 上以 `0d82d87b^`（前）vs `0d82d87b`（PR #1425，后）controller 镜像做同需求对照（400 创建请求、同池规格、基座 alloc≈99/98）。完整报告见 [wiki/opensandbox-pr1425-k3s-ab-verification.md](../wiki/opensandbox-pr1425-k3s-ab-verification.md)。
 
-- **池冻结实测**：前侧 churn 期间 Pool 控制器停止 reconcile ≥14 分钟（workqueue 指数退避 + 删除期望永不 observe），对应本文「冻结低烧」段；后侧全程 ~27 决策/分钟无冻结。
-- **trim 无门控**：前侧 scale-down 删除 13+ 事件（单轮 TOTAL 143→124）；后侧同场景仅 1 次（maxUnavailable 封顶）。
-- **buffer 口径**：前侧 `bufferCnt` 含 Pending/在途（B=49 / Available=0 实测 trace）；后侧只计 Ready idle。
+**最终判定：前坏后好成立，本 fork 应合 #1425（CRD 随行）。** 过程有波折：原后侧运行因部署失误被判无效（当时 #1425 pod 从未接管——镜像未入 worker 节点 containerd，`kubectl logs deploy/` 静默打到旧前侧 pod，日志 caller :1119 指纹可证，见报告 §7 取证与镜像/行为对照表）；重新部署并以 **caller :1132 指纹 + RS READY=1 验证接管**后重测，后侧结论成立（报告 §8）。
+
+- **前侧（有效）**：锯齿自噬（TOTAL 143→124→145→132→143→124）、冻结 ≥14 分钟、删除 16 事件（单轮 -19）、buffer 含在途（B=49/A=0）、终态 alloc 99 + 25 Pending 冻结。
+- **后侧重测（有效）**：决策全程连续（869 次，最大空窗 ≤1 分钟）；每波一次性收缩（137→108）单轮收敛无循环；删除 96 次执行、每轮 ≤25% 封顶；bufferCnt=0（Ready-only 口径实时 trace）；终态 alloc 98 / total 108 = alloc+bufferMin 精确收敛；Pending 仅 3 个（worker 节点 pod 上限墙，非控制器病理）。
+- **请求成功率两轮持平（99 vs ~97 /400）**：成功率由 30s `pool_acquisition_timeout` vs 70s 就绪决定，与控制器修复无关——修复的效果在病理消失，不在成功率。
 - **触发条件修正**：病理与「容量墙」无关——在无容量墙（50m 超轻模板、远低于节点余量）条件下同样复现；充分条件是「慢启动（readiness 70s > pool_acquisition_timeout 30s）+ 突发负载」使在途+Pending 堆积越界、supply 经失败潮塌缩。定量门槛 `alloc > 2×supply + 3×midpoint`（推导见 [触发条件证据链](../wiki/opensandbox-pool-scalein-trigger-evidence-chain.md)，同时解释小池不可触发与 <1/3 水位触发）。上游 #1423 的 1355 Pending 超限是 terminating 计数缺陷的症状而非根因。
-- **残留**：后侧 supply 塌缩后仍会删在途 pod（未 Ready 先删而非跳过），已封顶无正反馈；建议另开「scale-in 跳过 in-flight」小 issue。
+- **残留（有效运行实锤）**：后侧 supply 塌缩后仍会删在途 pod（未 Ready 先删而非跳过；波次响应期创建的 30 个在途超额 pod 被单轮收缩删除），已封顶、单轮收敛、无正反馈；建议另开「scale-in 跳过 in-flight」小 issue，不重开 #1423。
+- **方法论教训（A/B 必做）**：切镜像后必须验证新 pod 接管再开压——rollout status 成功 + RS readyReplicas=1 + 决策日志 caller 行号指纹（前 ：1119 / 后 ：1132）；`kubectl logs deploy/` 会静默打到旧 Ready pod。删除对账两侧统一用控制器日志 `Deleting pool pod` 口径（事件通道在 churn 期间会被淹没）。
 
 ## 关联
 
