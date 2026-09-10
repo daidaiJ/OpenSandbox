@@ -8,7 +8,7 @@
 
 ## 0. 结论先行
 
-**触发充分条件：慢启动（readiness > pool_acquisition_timeout）+ 突发负载 + 足够大的 alloc 基座（`alloc > 2×supply + 3×midpoint`）。与容量墙无关。** 修复判定：**前坏后好，本 fork 应合 PR #1425**；残留一项（scale-in 仍删在途 pod，已封顶），另开小 issue，不重开 #1423。
+**触发充分条件：慢启动（readiness > pool_acquisition_timeout）+ 突发负载 + 足够大的 alloc 基座（`alloc > 2×supply + 3×midpoint`）。与容量墙/资源限制无关——销毁风暴是调谐设计缺陷（§7）。** 修复判定：**前坏后好，本 fork 应合 PR #1425**（重测有效，§5）；合入后控制平面可平稳扩容承压，但请求成功率、波次 churn、在途删除三个边界需按 §10-§11 的配置/代码/运维措施补齐。残留一项（scale-in 仍删在途 pod，已封顶单轮收敛），另开小 issue，不重开 #1423。
 
 ---
 
@@ -114,7 +114,80 @@ C ≤ (alloc + supply) / 3                                  （百分比预算�
 | 边界 | `pool_acquisition_timeout` 与 readiness 的差值决定**易触发性**（催化剂强度），不是根因；`maxUnavailable` 同时是创建预算与删除封顶，调小可抬高触发门槛但不修缺陷 |
 | 观察项 | PR #1618（schedule 失败仍继续 scale/status）合入前需评估是否加重 trim（方案 §5.1） |
 
-## 7. 证据索引
+## 7. 排除资源限制：销毁是调谐设计缺陷，不是资源压力
+
+三条独立证据：
+
+1. **无容量墙条件下照样复现**：A/B 池模板 requests 仅 50m/32Mi（limit 128Mi），poolMax=400 全开 ≈ 20c / 12.8GiB，远低于 worker 节点可分配资源（62Gi 内存、CPU 富余）——前侧照样打出完整风暴。若存在资源阈值参与触发，这个量纲不可能成立。
+2. **删除动作的全部来源是控制器 scale-down 决策**：风暴中 pod 终结均为 `SuccessfulDelete … (scale-down)` / `Deleting pool pod`（reconcile 循环内 `r.Delete`），没有一例 Evicted / OOMKilled / 调度失败清理；且删除后控制器立刻重建——资源压力不会产生「边删边建」的正反馈，只有控制逻辑错误会。
+3. **生产环境的「容量超限」是症状不是根因**：上游 #1423 的 1355 Pending 超限由 terminating pod 不计入 totalPodCnt 的计数缺陷放大（§3）；重测后侧唯一与资源沾边的现象是终态 3 个 Pending（worker 节点 max-pods 上限墙 `Too many pods`），那是调度器容量边界，与销毁无关且量级差一个数量级（3 vs 25）。
+
+**结论：销毁风暴 = 调谐（reconcile）设计缺陷；资源限制既不必要也不充分。**
+
+## 8. PR 修复前后调谐反应对照
+
+| 调谐维度 | 前 `0d82d87b^` | 后 #1425 | 实测差异（前 vs 重测） |
+|---|---|---|---|
+| buffer 口径 | `schedulable-allocated`，Pending/在途全算富余（:1106） | `countReadyIdlePods`，只计 Ready idle（:1122） | B=49/A=0 误计 vs **bufferCnt=0 实时 trace** |
+| 触发几何 | 带内恒不剪；带外绝对带 `buffer > supply + midpoint` | 同一几何，但误计消失后搁浅在途不再推高 buffer | 前侧被一次失败潮推越带；后侧未越带，收缩由真实超额驱动 |
+| scale-in 上限 | **无门控**，一轮删任意多（:1147-1153） | 每轮 `maxUnavailable(25%×desired)` 封顶 | 单轮 -19 无界 vs 单轮 ≤25%、7+23 分轮 |
+| 删除排序 | 最老优先 → 删最接近 Ready 的在途（浪费最大） | 未 Ready 先删、同就绪度新的先删（浪费最小） | 删掉即将就绪的 pod vs 删刚创建的 pod |
+| 期望值管理 | 删除期望永不 observe → 卡死 | `observeDeletedPods`/`ExpectScale(Delete)` | 期望卡死加剧冻结 vs 可满足 |
+| 错误路径 | `return fmt.Errorf` → workqueue 指数退避（上限 1000s） | `return true, nil` 软 requeue | **冻结 ≥14 分钟** vs 最大空窗 ≤1 分钟 |
+| 状态热循环 | CRD 无 `status.updated`，每轮写 status | CRD 补 `status.updated`，DeepEqual 可判等 | 上游 #1423 的 ~1005 reconciles/min 热循环消除 |
+| 实测轨迹 | 锯齿 143→124→145→132→143→124，冻死 124 | 每波一次性收缩 137→108、138→108，收敛 | alloc 99+25Pending 冻死 vs alloc98/total108=alloc+bufferMin 精确收敛 |
+
+## 9. 销毁风暴的必要条件（缺一不可）
+
+| # | 条件 | 作用 | 反证 |
+|---|---|---|---|
+| C1 | **慢启动**：pod readiness P95 > server `pool_acquisition_timeout`(30s) | 突发请求在池阻塞线批量失败 → supply 搁浅堆积 | 快启动 MVP 复现不出（请求即时分配，带内恒不剪） |
+| C2 | **突发负载**：波次规模相对池预算足够大（每轮创建 ≤25%×desired） | 在途/失败潮能堆出「越带」的 buffer | 平稳 ramp（30s 间隔小批）爬坡全程无 trim |
+| C3 | **足够大的 alloc 基座**：`alloc > 2×supply + 3×midpoint` | 百分比预算与绝对带的错配——小池数学上不可触发 | 小池 MVP（alloc~十几 < 75+）复现不出；生产 <1/3 水位即触发（绝对数门槛） |
+| C4 | **四缺陷在场**：buffer 误计 + scale-in 无门控 + 最老优先 + 冻结路径 | 把一次越界 trim 放大成「删→建→删」正反馈 + 池失联 | 后侧同触发条件仅单轮收敛、不复发 |
+
+**非条件**：资源限制/容量墙（§7 证伪）、kata 等 特定 runtime（只是 C1 的一种来源）、特定 server 版本。
+
+## 10. 合入 PR 后能否平稳扩容承压
+
+**结论：控制平面可以平稳承压（有重测证据）；业务感受需要配置措施补齐（§11）。**
+
+已证（重测，同配方 400 请求/15min、双波×50）：调谐连续不冻结（869 决策，峰值 187/分钟）；扩容追赶速率 25%/轮；波次后单轮收缩收敛（~60s 内回带）；终态精确收敛 alloc+bufferMin；删除限幅 ≤25%。
+
+四个承压边界（PR 不解决、需另行处理）：
+
+1. **请求成功率不因 PR 改善**：30s 池阻塞线 vs 70s 就绪，两轮失败率均 ~75%——慢启动业务打突发仍会大面积 `POD_READY_TIMEOUT`，只是池不再陪葬；
+2. **波次 churn 成本**：响应突发会按需求信号超建（~30/波），失败潮后整批回收——偶发突发没问题，**高频突发**下「建 30 删 30」成为常态抖动；
+3. **在途删除残留**：scale-in 仍删未 Ready 的超额 pod（封顶、单轮收敛），极端情况下拖慢对真实迟到需求的追赶；
+4. **两堵墙**：CRD 必须随 controller 同步升级（否则回热循环）；worker 节点 max-pods 上限是独立于池参数的调度墙（重测终态 3 Pending 即此）。
+
+## 11. 对策清单（代码 / 配置 / 业务运维）
+
+### 11.1 代码（controller，建议提上游或随本 fork 合入）
+
+1. **scale-in 跳过 in-flight**（清残留，最高优先）：`pickPodsToDelete` 对未 Ready 的 idle pod 直接跳过（或单列低优先级 + 独立限速），只回收真正富余的 Ready idle；
+2. **scale-in 滞回**：buffer 越带需持续 N 个 reconcile（或 cooldown，如 60s）才执行删除；删除后一个窗口内抑制再创建——消除「建 30 删 30」churn；
+3. **需求驱动扩容**：把 server 侧等待中请求数注入 desired 计算（替代 25% 预算式盲目追赶），突发时一次到位、不靠多轮爬坡；
+4. **可观测性**：暴露 decision-rate、scaleIn/delete 执行速率、expectations 未满足时长指标（呼应 open 的 #1650/#1651）。
+
+### 11.2 配置（现版本即可落地，性价比最高）
+
+1. **拆掉 C1**：`pool_acquisition_timeout_seconds` 30s → ≥ 业务容器就绪 P95（建议 120s，且 ≤ 业务创建超时 240s）——失败潮消失，supply 不搁浅，触发不等式左端堆不起来；
+2. **Pool spec 余量**：`bufferMax` 覆盖慢启动下一个波次的规模；`bufferMin` 保持小；`maxUnavailable` 可调小（如 10%）降低双向抖动幅度（代价：创建预算同步变小、追赶变慢，按业务取舍）；
+3. **治 C1 根因**：节点预拉业务镜像；启动期用 startupProbe + 分层 readiness 让「进程起」与「服务就绪」分离上报；突发型池避免 kata 类 60s+ 启动的重 runtime。
+
+### 11.2 补充：不要用资源参数治这个病
+
+调大 requests/limits、加节点只会推迟 C3 的绝对门槛（门槛是绝对数 alloc > 2×supply+75，扩容后 alloc 上限更高反而**更容易**触发），并放大爆炸半径。
+
+### 11.3 业务运维
+
+1. **削峰**：业务层令牌桶/排队把瞬时突发拉平成 ramp（重测中「基座爬坡」就是健康形态）；SDK 侧用 `SandboxPool` warmup 预热（warmupConcurrency ≤ 200）；
+2. **分池**：突发型与慢启动业务隔离池；慢启动池预留基座安全边际，避免在大 alloc 基座上突然打慢启动突发；
+3. **监控告警四件套**：decision-rate 掉零（冻结前兆，前侧核心信号）；scale-down 删除速率 vs 沙箱释放速率分离（自噬标志）；bufferCnt 与 Available 口径长期偏差（误计信号）；Pending 堆积且 message 含 `Too many pods`（max-pods 扩容信号）；
+4. **升级 SOP**：#1425 以 chart 一体升级（CRD 随行）；灰度单池用「决策日志 caller 行号指纹」验收新二进制接管（前 ：1119 / 后 ：1132）；上线前按 §5 复现配方缩比压测、判定表逐项核对；保留回滚预案。
+
+## 12. 证据索引
 
 | 主张 | 证据 |
 |---|---|
@@ -123,6 +196,9 @@ C ≤ (alloc + supply) / 3                                  （百分比预算�
 | 删除封顶 | 后侧同场景 1 次事件 vs 前侧 13+ |
 | 创建百分比预算 | `0d82d87b^` pool_controller.go:1128-1132、:1242-1253 |
 | 删除绝对带无门控 | 同上 :1106-1115、:1147-1153 |
+| 销毁非资源所致 | 重测全程零 Evicted/OOMKilled，删除均为 scale-down 决策（`Deleting pool pod` 96 次对账）；无容量墙复现（50m/32Mi×400 ≈ 20c） |
+| 合入后承压能力 | 重测 869 决策连续、波后 ~60s 收敛、单轮 ≤25% 限幅（A/B 报告 §8） |
+| max-pods 调度墙 | 重测终态 3 Pending，message=`Too many pods`（worker 节点上限，与控制器无关） |
 | 无容量墙复现 | A/B 报告 §1（50m/32Mi 模板）+ §3 触发条件修正段 |
 | 上游机制 | #1423 描述 + 方案文档 §5.1 分层盘点 |
 | 复现配方 | A/B 报告 §5 + 集群 `/tmp/bisect/`（pool-bisect-churn.yaml / ramp4.sh / sample.sh / monitor.sh） |
