@@ -8,7 +8,7 @@
 
 ## 0. 结论先行
 
-**触发充分条件：慢启动（readiness > pool_acquisition_timeout）+ 突发负载 + 足够大的 alloc 基座（`alloc > 2×supply + 3×midpoint`）。与容量墙/资源限制无关——销毁风暴是调谐设计缺陷（§7）。** 修复判定：**前坏后好，本 fork 应合 PR #1425**（重测有效，§5）；合入后控制平面可平稳扩容承压，但请求成功率、波次 churn、在途删除三个边界需按 §10-§11 的配置/代码/运维措施补齐。残留一项（scale-in 仍删在途 pod，已封顶单轮收敛），另开小 issue，不重开 #1423。
+**触发必要条件分两阶段**：触发一次错误 trim 需「假 buffer 误计在场（N1）+ 未 Ready 未分配质量 M 越过双门槛 `max(bufferMax, supply+midpoint)`（N2）+ 池体量供得起 M（N3）+ 就绪时长≫调谐节奏（N4）」；从单次误剪升级为自持风暴还需「需求持续（N5）+ 无门控与最老优先（N6）」。**与资源限制/容量墙无关、与请求失败潮无关（生产 240s 无失败潮仍中招）——风暴是调谐设计缺陷（§7）**。修复判定：**前坏后好，本 fork 应合 PR #1425**（重测有效，§5）；合入后的配置与运维优化指导见 §12。残留一项（scale-in 仍删在途 pod，已封顶单轮收敛），另开小 issue，不重开 #1423。
 
 ---
 
@@ -62,27 +62,22 @@
 
 **(1) 带内恒不剪。** buffer 在 `[bufferMin, bufferMax]` 内时 `desiredBufferCnt = bufferCnt`，代入 :1115 得 `desired = alloc+supply+buffer = schedulableCnt`，故 `scaleIn ≡ 0`——**无论 alloc 多大，带内数学上不可能 trim**。trim 只能发生在带外（buffer > bufferMax）。
 
-**(2) 带外触发条件是绝对带。** band 外 `desiredBufferCnt = midpoint`，此时：
+**(2) 带外触发是双门槛。** 出带本身要求 `bufferCnt > bufferMax`；band 外 `desiredBufferCnt = midpoint` 后还要：
 
 ```
 scaleIn = schedulableCnt - (alloc + supply + midpoint) = bufferCnt - supplyCnt - midpoint
-scaleIn > 0  ⟺  bufferCnt > supplyCnt + midpoint        （绝对阈值）
+触发  ⟺  M > max( bufferMax, supply + midpoint )        （双门槛取大）
 ```
 
-**(3) 波次规模受百分比预算封顶。** 突发波把 C 个 pod 送入在途/搁浅，而这些在途本身计入 desired 分母，故单轮创建预算满足 `C ≤ 25%×(alloc+supply+C)`，解出：
+**(3) 在途质量受百分比预算封顶。** 突发把未 Ready 未分配质量 M 堆起来，创建在 `notReadyCnt = 25%×desired` 时自动停止，故 `M_max ≈ 25%×desired ≈ (alloc + supply)/3`。
+
+**联立**——要剪，需 M 越过双门槛：
 
 ```
-C ≤ (alloc + supply) / 3                                  （百分比预算）
+alloc ≳ 3×bufferMax − supply   且   alloc ≳ 2×supply + 3×midpoint
 ```
 
-**联立（2)(3)**——要剪，需搁浅量（至多 C）越过绝对带：
-
-```
-(alloc + supply)/3 > supply + midpoint
-⟹  alloc > 2×supply + 3×midpoint
-```
-
-测试池 buffer 10-40 → midpoint = 25 → **alloc > 2×supply + 75**。
+测试池 buffer 10-40 → 两式分别 ≈ `alloc > 120 − supply` 与 `alloc > 2×supply + 75`，量级相当；**bufferMax 配得越小、alloc 越大，越容易触发**。
 
 ### 三个推论（逐条回收此前疑问）
 
@@ -137,16 +132,28 @@ C ≤ (alloc + supply) / 3                                  （百分比预算�
 | 状态热循环 | CRD 无 `status.updated`，每轮写 status | CRD 补 `status.updated`，DeepEqual 可判等 | 上游 #1423 的 ~1005 reconciles/min 热循环消除 |
 | 实测轨迹 | 锯齿 143→124→145→132→143→124，冻死 124 | 每波一次性收缩 137→108、138→108，收敛 | alloc 99+25Pending 冻死 vs alloc98/total108=alloc+bufferMin 精确收敛 |
 
-## 9. 销毁风暴的必要条件（缺一不可）
+## 9. 销毁风暴的必要条件（分两阶段：触发一次 → 自持成风暴）
 
-| # | 条件 | 作用 | 反证 |
+**阶段一：触发第一次错误 trim（全部满足才发生）**
+
+| # | 条件 | 说明 | 反证 |
 |---|---|---|---|
-| C1 | **慢启动**：未 Ready 在途长时间滞留在前侧误计的 buffer 口径内（readiness 越慢、创建预算越大，假 buffer 质量越大）。**不要求请求失败**——失败潮（readiness > 等待预算）只是加速器 | 突发/回收潮把假 buffer 顶过绝对带 → trim 删最接近 Ready 的在途 | 快启动 MVP 复现不出（在途秒级就绪，假 buffer 停留时间≈0） |
-| C2 | **突发负载**：波次规模相对池预算足够大（每轮创建 ≤25%×desired） | 在途/失败潮能堆出「越带」的 buffer | 平稳 ramp（30s 间隔小批）爬坡全程无 trim |
-| C3 | **足够大的 alloc 基座**：`alloc > 2×supply + 3×midpoint` | 百分比预算与绝对带的错配——小池数学上不可触发 | 小池 MVP（alloc~十几 < 75+）复现不出；生产 <1/3 水位即触发（绝对数门槛） |
-| C4 | **四缺陷在场**：buffer 误计 + scale-in 无门控 + 最老优先 + 冻结路径 | 把一次越界 trim 放大成「删→建→删」正反馈 + 池失联 | 后侧同触发条件仅单轮收敛、不复发 |
+| N1 | **误计缺陷在场**（假 buffer） | 未 Ready 未分配 pod 被计入 bufferCnt——没有它，在途不构成"富余"，无 spurious trim | 后侧同负载零 spurious trim |
+| N2 | **未 Ready 未分配质量 M 越过双门槛**：`M > bufferMax`（出带）且 `M > supply + midpoint` | 注意两个门槛取大——**bufferMax 越小越易触发**；纯 Ready idle 超带被剪是正常缩容，不构成病理 | 小池 MVP：M_max 不足 |
+| N3 | **池体量供得起 M**：M_max ≈ 25%×desired（创建预算在 notReadyCnt=25%×desired 时自动停止）≈ (alloc+supply)/3，故需 `alloc ≳ 3×bufferMax − supply` 且 `alloc ≳ 2×supply + 3×midpoint` | 大池单轮创建就是几十个在途，M 秒级可越带 | 生产 alloc 数百恒满足；测试 alloc 99 + bufferMax 40 边缘满足 |
+| N4 | **就绪时长 ≫ 调谐节奏**：让 M 以"未 Ready"形态停留多个 reconcile 周期 | "慢启动"是相对量——大池上几秒的就绪延迟即可；与请求超时无关 | 快启动 MVP：在途秒级就绪，M 形不成 |
 
-**非条件**：资源限制/容量墙（§7 证伪）、kata 等 特定 runtime（只是 C1 的一种来源）、特定 server 版本。
+**阶段二：从单次 trim 变成自持风暴（风暴 ≠ 单次误剪）**
+
+| # | 条件 | 说明 |
+|---|---|---|
+| N5 | **需求持续存在**：等待中的沙箱/请求不消失（长超时或持续到达） | 240s 只延长需求信号→风暴窗口更长；短超时风暴死得快但失败更集中 |
+| N6 | **无门控 + 最老优先在场** | 最老优先删掉≈最接近 Ready 的 pod → 分配永远追不上 → 需求永不满足 → 循环不断粮；无门控使每轮破坏最大化。若删的是最新（刚创建），老 pod 会 Ready 并被分配，几轮后收敛——**此缺陷是把"浪费"变成"正反馈"的关键** |
+| N7 | （放大器，非必要）错误路径冻结 | 把风暴升级为"风暴+失联"，滞留更久 |
+
+**非条件**：资源限制/容量墙（§7 证伪）；请求失败潮（生产 240s 无失败潮仍中招——失败潮只是 M 的加速器，如 readiness>总闸、poolMax 429）；特定 runtime（kata 只是 N4 的极端来源）。
+
+**合入 #1425 后各条件的对应消除**：N1 被 `countReadyIdlePods` 消除（燃料断）；N6 的门控与排序被 maxUnavailable 封顶 + 新先删缓解（破坏限幅）；N5 需求信号仍在，但单轮收敛不再正反馈（重测实证：波次后 ~60s 收敛）。
 
 ## 10. 合入 PR 后能否平稳扩容承压
 
@@ -172,14 +179,14 @@ C ≤ (alloc + supply) / 3                                  （百分比预算�
 
 ### 11.2 配置（现版本即可落地，性价比最高）
 
-1. **超时参数只改失败语义，不阻止风暴**（生产 240s 仍中招）：`sandbox_create_timeout_seconds` ≥ readiness P95 能让请求活到就绪（降低 504），但循环燃料是误计的假 buffer，与超时无关；`pool_acquisition_timeout_seconds` 是「池耗尽 429+Retry-After」快速失败通道（≤ 总闸），按业务重试节奏配置。**治风暴的正确组合 = 合 #1425（断假 buffer 燃料）+ 削峰（减小瞬时在途质量）+ 加速就绪（缩短假 buffer 停留时间）**；#1425 无法短期合入时的临时缓解也仅此三条（或把 alloc 压到 `2×supply+75` 以下使 C3 不满足，业务上通常不现实）；
+1. **超时参数只改失败语义，不阻止风暴**（生产 240s 仍中招）：`sandbox_create_timeout_seconds` ≥ readiness P95 能让请求活到就绪（降低 504），但循环燃料是误计的假 buffer，与超时无关；`pool_acquisition_timeout_seconds` 是「池耗尽 429+Retry-After」快速失败通道（≤ 总闸），按业务重试节奏配置。**治风暴的正确组合 = 合 #1425（断假 buffer 燃料，N1）+ 削峰（减小瞬时在途质量，压 N2）+ 加速就绪（缩短在途假 buffer 停留时间，压 N4）**；#1425 无法短期合入时的临时缓解也仅此三条（或把 alloc 压到双门槛以下使 N3 不满足，业务上通常不现实）；
 2. **Pool spec 余量**：`bufferMax` 覆盖慢启动下一个波次的规模；`bufferMin` 保持小；`maxUnavailable` 可调小（如 10%）降低双向抖动幅度（代价：创建预算同步变小、追赶变慢，按业务取舍）；
-3. **治 C1 根因**：节点预拉业务镜像；启动期用 startupProbe + 分层 readiness 让「进程起」与「服务就绪」分离上报；突发型池避免 kata 类 60s+ 启动的重 runtime；
+3. **压 N4（就绪时长）**：节点预拉业务镜像；启动期用 startupProbe + 分层 readiness 让「进程起」与「服务就绪」分离上报；突发型池避免 kata 类 60s+ 启动的重 runtime；
 4. **并发与 grace 调优**（2026-09-10 晚核对默认值）：控制器并发**不是单线程**——`MaxConcurrentReconciles` 默认 Pool=16、BatchSandbox=32（`cmd/controller/main.go:60-62`），可用 `--concurrency` flag 调整但 **helm chart 未暴露**该参数（多池场景可自行加 args）；但同一 Pool 的 reconcile 天然串行，且一轮内 create/delete 是串行 for 循环（受 `--kube-client-qps=100/burst=200` 限速）。Pod 删除的 grace 控制器不干预、模板也未设 → 落 K8s 默认 **30s `terminationGracePeriodSeconds`**：scale-down 删的是 idle 无会话 pod，30s 只是占着资源与 pod 槽位（加剧 max-pods 墙），**Pool 模板可设 5-10s 加速收敛**；注意若走 BatchSandbox 回收路径且业务有 S3 产物回写等 postStop 逻辑，需按业务评估再缩短；期望值超时默认 5min（`--expectation-timeout`，前侧冻结的放大器，#1425 后删除期望可 observe 一般不会触顶）。
 
 ### 11.2 补充：不要用资源参数治这个病
 
-调大 requests/limits、加节点只会推迟 C3 的绝对门槛（门槛是绝对数 alloc > 2×supply+75，扩容后 alloc 上限更高反而**更容易**触发），并放大爆炸半径。
+调大 requests/limits、加节点只会推迟 N3 的绝对门槛（门槛是绝对数而非占比，扩容后 alloc 上限更高反而**更容易**触发），并放大爆炸半径。
 
 ### 11.3 业务运维
 
@@ -201,7 +208,36 @@ C ≤ (alloc + supply) / 3                                  （百分比预算�
 
 止血（按序）：① `rollout restart` controller（冻结唯一解法，重启即清卡死期望）；② 按业务确认批量 DELETE 僵尸沙箱让 alloc 回落；③ idle 池 pod 卡 Terminating 用 `--grace-period=0 --force`（勿用于有会话 pod）；④ 低谷期删池重建（alloc 归零，代价是容量短暂清零）；⑤ 治本 = 合 #1425 + §11.2 配置对齐。
 
-## 12. 证据索引
+## 12. 合入 #1425 后的配置与运维优化指导
+
+前提：风暴环路的燃料（假 buffer）已被 `countReadyIdlePods` 掐断，以下不再围绕"防风暴"，而是围绕**承压体验（成功率/延迟/抖动）与成本**。
+
+### 12.1 配置基线（参数 → 建议值 → 依据）
+
+| 参数 | 建议值 | 依据（重测实证/代码语义） |
+|---|---|---|
+| `sandbox_create_timeout_seconds` | ≥ 业务 readiness P95 + 30% 余量（如 P95 70s → 120s；业务现值 240s 若 P95≤180s 可保持） | 决定突发中"拿到 pod 的请求"能否活到就绪；与风暴无关，纯成功率参数 |
+| `pool_acquisition_timeout_seconds` | 30-60s，≤ 总超时 | 池打满时的 429+Retry-After 快速失败通道；给业务明确的重试语义，比挂满总超时好 |
+| `sandbox_create_poll_interval_seconds` | 1s 默认；批量创建压力大时 2s | 只影响状态感知延迟与 server→API 压力 |
+| `bufferMin` | 5-10%×poolMax | 保底吸收零星请求，避免冷启动 |
+| `bufferMax` | **≥ 一个典型突发波次规模**（如常见波 50 → 60-80） | Ready idle buffer 是突发的即时吸收器；post-fix 下 bufferMax 只决定"何时收缩"——太小会在两波之间反复建删（churn），太大是 idle 成本 |
+| `maxUnavailable` | 25% 默认；对 churn 敏感降 15% | 双重身份：创建预算（越大追赶越快）+ 删除封顶（越大单轮抖动越大） |
+| `poolMin / poolMax` | poolMin=低谷水位；poolMax=峰值 alloc + 一个波次 | 同时核对节点 max-pods 与 namespace 配额总账（含 system pod） |
+| `recycleStrategy` | Delete（默认） | 重测口径下已无风暴放大问题 |
+| 池模板 `terminationGracePeriodSeconds` | 5-10s | scale-down 删的是 idle 无会话 pod，30s 默认只占资源/pod 槽位；注意与业务 postStop（S3 回写等）评估分开——那是 BatchSandbox 回收路径 |
+| `--concurrency` | 多池 >8 或 BS 量大时调高（默认 Pool=16/BS=32） | chart 未暴露该 flag，需自行加 args |
+| `--kube-client-qps/burst` | 大池（poolMax 400+）观察 client 限流指标，必要时 200/400 | create/delete 是串行循环，QPS 直接决定单轮收敛速度 |
+
+### 12.2 运维动作（按优先级）
+
+1. **升级 SOP**：chart 一体升级（**CRD 必须随行**，缺 `status.updated` 回热循环）；单池灰度；验收三件套 = `rollout status` 成功 + RS readyReplicas=1 + 决策日志 caller `:1132` 指纹；回滚预案就绪。
+2. **监控告警**（升级前后都要有）：decision-rate 掉零（冻结）；scale-down 删除速率 vs 沙箱释放速率分离；Pending message 分类（`Too many pods` → max-pods 扩容；quota → 配额扩容）；新增 **pod readiness P95**（成功率第一决定因素）。
+3. **削峰**：业务层令牌桶/排队把瞬时突发拉平；SDK `SandboxPool` warmup（并发 ≤200）。post-fix 下削峰不再是"防风暴"，而是减少波间建删 churn 与 429。
+4. **启动加速**：节点预拉业务镜像、startupProbe+分层 readiness、突发型池避免重 runtime——成功率与分配延迟的主杠杆。
+5. **容量台账**：每池记录 alloc 峰值、典型突发规模、readiness P95、节点 max-pods/配额余量；变更池参数前对照本表复核。
+6. **回归验收**：大版本/参数变更后按 §5 复现配方跑缩比 ramp，判定表逐项核对（保留的 A/B 镜像可复用）。
+
+## 13. 证据索引
 
 | 主张 | 证据 |
 |---|---|
