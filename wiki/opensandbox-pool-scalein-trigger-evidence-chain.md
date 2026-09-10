@@ -88,9 +88,9 @@ C ≤ (alloc + supply) / 3                                  （百分比预算�
 
 1. **为何必须体量大才能触发**：绝对带 `midpoint`（本池 25）不随池规模缩小，而可搁浅量 C 随 alloc 线性放大。`alloc ≤ 2×supply + 75` 的池（如 MVP：poolMin 4 / poolMax 24，alloc~十几）**在数学上不可能触发**——这正是 MVP 复现失败的全部原因，不是操作问题。
 2. **为何不到 1/3 水位就触发**：alloc≈100（poolMax=400 的 25%）时 `100 > 2×10+75` 已满足。门槛是**绝对数**不是占比——「水位线」直觉在此失效，也再次排除容量墙根因。
-3. **创建超时参数的真实角色**（2026-09-10 晚按 server 源码修正口径）：测试集群 CM 实配 `pool_acquisition_timeout_seconds=60`、`sandbox_create_timeout_seconds` 未配（默认 60s）→ 波次请求全部在 **60s 创建总超时**闸口以 `POD_READY_TIMEOUT` 阵亡（readiness 70s > 60s），`pool_acquisition_timeout` 的 429 池耗尽快速失败通道（reason=POOL_CAPACITY_EXHAUSTED 才计时）一次都没触发。**把创建总超时调到 ≥ readiness P95 确实能拆掉 C1 这一个触发条件**（波次请求能活到就绪）；但它不构成对缺陷的豁免——容量型失败潮（poolMax 墙/配额 429，即上游 #1423 的 1355 Pending 案例）不经过这个参数，且控制器四缺陷（误计/无门控/最老优先/冻结）与热循环、terminating 计数等独立缺陷原样存在。上游专门出 #1425 正因缺陷本身必须修。
+3. **创建超时参数不在风暴环路上**（2026-09-10 两轮修正，生产 240s 仍中招为最终证词）：风暴的燃料是「未 Ready 在途被误计入 buffer」（假 buffer），循环自给自足——25% 创建预算把几十个在途送进假 buffer → `假buffer > supply+25` → trim 删最接近 Ready 的 → 需求仍在 → 继续创建 → 循环，**没有任何一环需要请求先失败**。`sandbox_create_timeout_seconds` 只决定请求多晚死、报什么码（504 `POD_READY_TIMEOUT` / 活到就绪），240s 下请求等待更久=需求信号更持久，反而拉长风暴窗口。测试环境的 60s 失败潮只是把假 buffer 顶得更猛的加速器。容量型失败潮（poolMax 墙 429）同理只是另一种加速器。
 
-**催化剂链**：readiness 70s > 创建总超时 60s（测试环境默认值；acquisition 闸 CM 实配 60s，取 min 后同为 60）→ 突发请求以 `POD_READY_TIMEOUT` 批量阵亡 → 失败潮后 supply 塌缩、在途搁浅堆积 → `bufferCnt ≫ supply+midpoint` → 带外 trim 启动 → 删最老在途（≈最接近 Ready）→ 水位缺口回血再创建 → 循环；并发错误路径 `return fmt.Errorf` 触发 workqueue 指数退避 → 池冻结。
+**催化剂链**：readiness 70s > 创建总超时 60s（测试环境默认值；acquisition 闸 CM 实配 60s，取 min 后同为 60）→ 突发请求以 `POD_READY_TIMEOUT` 批量阵亡（**失败潮是加速器非燃料**——生产 240s 未失败潮仍中招，见推论 3）→ 在途搁浅堆积、假 buffer 顶过绝对带 → 带外 trim 启动 → 删最老在途（≈最接近 Ready）→ 需求仍在继续创建 → 循环；并发错误路径 `return fmt.Errorf` 触发 workqueue 指数退避 → 池冻结。
 
 ## 5. 环节四：A/B 实证（证伪容量 + 证实修复）
 
@@ -141,7 +141,7 @@ C ≤ (alloc + supply) / 3                                  （百分比预算�
 
 | # | 条件 | 作用 | 反证 |
 |---|---|---|---|
-| C1 | **慢启动**：pod readiness P95 > 请求等待预算（`sandbox_create_timeout_seconds`，测试环境默认 60s） | 突发请求在总闸批量 `POD_READY_TIMEOUT` 阵亡 → supply 搁浅堆积（池耗尽 429 快速失败通道在池未到容量墙时不触发） | 快启动 MVP 复现不出（请求即时分配，带内恒不剪） |
+| C1 | **慢启动**：未 Ready 在途长时间滞留在前侧误计的 buffer 口径内（readiness 越慢、创建预算越大，假 buffer 质量越大）。**不要求请求失败**——失败潮（readiness > 等待预算）只是加速器 | 突发/回收潮把假 buffer 顶过绝对带 → trim 删最接近 Ready 的在途 | 快启动 MVP 复现不出（在途秒级就绪，假 buffer 停留时间≈0） |
 | C2 | **突发负载**：波次规模相对池预算足够大（每轮创建 ≤25%×desired） | 在途/失败潮能堆出「越带」的 buffer | 平稳 ramp（30s 间隔小批）爬坡全程无 trim |
 | C3 | **足够大的 alloc 基座**：`alloc > 2×supply + 3×midpoint` | 百分比预算与绝对带的错配——小池数学上不可触发 | 小池 MVP（alloc~十几 < 75+）复现不出；生产 <1/3 水位即触发（绝对数门槛） |
 | C4 | **四缺陷在场**：buffer 误计 + scale-in 无门控 + 最老优先 + 冻结路径 | 把一次越界 trim 放大成「删→建→删」正反馈 + 池失联 | 后侧同触发条件仅单轮收敛、不复发 |
@@ -172,7 +172,7 @@ C ≤ (alloc + supply) / 3                                  （百分比预算�
 
 ### 11.2 配置（现版本即可落地，性价比最高）
 
-1. **拆掉 C1**：`sandbox_create_timeout_seconds` 调到 ≥ 业务容器就绪 P95 + 余量（如 120s；测试环境是默认 60s 才让 readiness 70s 全军覆没）；`pool_acquisition_timeout_seconds` 是「池耗尽 429+Retry-After」快速失败通道（取 min 不超过总闸），按业务重试节奏配置——若想让请求等新 pod 就绪而非快速失败，须与总闸一起拉大；
+1. **超时参数只改失败语义，不阻止风暴**（生产 240s 仍中招）：`sandbox_create_timeout_seconds` ≥ readiness P95 能让请求活到就绪（降低 504），但循环燃料是误计的假 buffer，与超时无关；`pool_acquisition_timeout_seconds` 是「池耗尽 429+Retry-After」快速失败通道（≤ 总闸），按业务重试节奏配置。**治风暴的正确组合 = 合 #1425（断假 buffer 燃料）+ 削峰（减小瞬时在途质量）+ 加速就绪（缩短假 buffer 停留时间）**；#1425 无法短期合入时的临时缓解也仅此三条（或把 alloc 压到 `2×supply+75` 以下使 C3 不满足，业务上通常不现实）；
 2. **Pool spec 余量**：`bufferMax` 覆盖慢启动下一个波次的规模；`bufferMin` 保持小；`maxUnavailable` 可调小（如 10%）降低双向抖动幅度（代价：创建预算同步变小、追赶变慢，按业务取舍）；
 3. **治 C1 根因**：节点预拉业务镜像；启动期用 startupProbe + 分层 readiness 让「进程起」与「服务就绪」分离上报；突发型池避免 kata 类 60s+ 启动的重 runtime；
 4. **并发与 grace 调优**（2026-09-10 晚核对默认值）：控制器并发**不是单线程**——`MaxConcurrentReconciles` 默认 Pool=16、BatchSandbox=32（`cmd/controller/main.go:60-62`），可用 `--concurrency` flag 调整但 **helm chart 未暴露**该参数（多池场景可自行加 args）；但同一 Pool 的 reconcile 天然串行，且一轮内 create/delete 是串行 for 循环（受 `--kube-client-qps=100/burst=200` 限速）。Pod 删除的 grace 控制器不干预、模板也未设 → 落 K8s 默认 **30s `terminationGracePeriodSeconds`**：scale-down 删的是 idle 无会话 pod，30s 只是占着资源与 pod 槽位（加剧 max-pods 墙），**Pool 模板可设 5-10s 加速收敛**；注意若走 BatchSandbox 回收路径且业务有 S3 产物回写等 postStop 逻辑，需按业务评估再缩短；期望值超时默认 5min（`--expectation-timeout`，前侧冻结的放大器，#1425 后删除期望可 observe 一般不会触顶）。
