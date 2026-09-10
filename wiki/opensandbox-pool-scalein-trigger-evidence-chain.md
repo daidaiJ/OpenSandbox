@@ -174,7 +174,8 @@ C ≤ (alloc + supply) / 3                                  （百分比预算�
 
 1. **拆掉 C1**：`pool_acquisition_timeout_seconds` 30s → ≥ 业务容器就绪 P95（建议 120s，且 ≤ 业务创建超时 240s）——失败潮消失，supply 不搁浅，触发不等式左端堆不起来；
 2. **Pool spec 余量**：`bufferMax` 覆盖慢启动下一个波次的规模；`bufferMin` 保持小；`maxUnavailable` 可调小（如 10%）降低双向抖动幅度（代价：创建预算同步变小、追赶变慢，按业务取舍）；
-3. **治 C1 根因**：节点预拉业务镜像；启动期用 startupProbe + 分层 readiness 让「进程起」与「服务就绪」分离上报；突发型池避免 kata 类 60s+ 启动的重 runtime。
+3. **治 C1 根因**：节点预拉业务镜像；启动期用 startupProbe + 分层 readiness 让「进程起」与「服务就绪」分离上报；突发型池避免 kata 类 60s+ 启动的重 runtime；
+4. **并发与 grace 调优**（2026-09-10 晚核对默认值）：控制器并发**不是单线程**——`MaxConcurrentReconciles` 默认 Pool=16、BatchSandbox=32（`cmd/controller/main.go:60-62`），可用 `--concurrency` flag 调整但 **helm chart 未暴露**该参数（多池场景可自行加 args）；但同一 Pool 的 reconcile 天然串行，且一轮内 create/delete 是串行 for 循环（受 `--kube-client-qps=100/burst=200` 限速）。Pod 删除的 grace 控制器不干预、模板也未设 → 落 K8s 默认 **30s `terminationGracePeriodSeconds`**：scale-down 删的是 idle 无会话 pod，30s 只是占着资源与 pod 槽位（加剧 max-pods 墙），**Pool 模板可设 5-10s 加速收敛**；注意若走 BatchSandbox 回收路径且业务有 S3 产物回写等 postStop 逻辑，需按业务评估再缩短；期望值超时默认 5min（`--expectation-timeout`，前侧冻结的放大器，#1425 后删除期望可 observe 一般不会触顶）。
 
 ### 11.2 补充：不要用资源参数治这个病
 
