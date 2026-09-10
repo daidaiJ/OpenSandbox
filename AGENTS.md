@@ -38,7 +38,6 @@ This repository is the sandbox execution engine for an **internal agent service 
   - `wiki/opensandbox-task-template-user-info-injection-example.md` — user info injection
   - `wiki/opensandbox-k8s-networkpolicy-vs-egress-sidecar.md` — network isolation choice
   - `wiki/opensandbox-shared-storage-interpreter-minimal-image.md` — image slimming
-  - `changes/954-runtime-perception-proxy.md` — silent rebuild perception (implemented)
   - Platform selection comparison (OpenSandbox vs CubeSandbox) lives in the `agent-teams-docs` repo (`opensandbox-vs-cubesandbox-selection.md`).
 
 ## Routing

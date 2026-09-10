@@ -56,7 +56,6 @@
 | 用户信息注入 | `wiki/opensandbox-task-template-user-info-injection-example.md` |
 | 网络隔离选型 | `wiki/opensandbox-k8s-networkpolicy-vs-egress-sidecar.md` |
 | 镜像瘦身 | `wiki/opensandbox-shared-storage-interpreter-minimal-image.md` |
-| 静默重建感知 | `changes/954-runtime-perception-proxy.md`（已实施） |
 | 实操 Cookbook | `exporter/README.md` |
 
 ## 6. 变更记录
