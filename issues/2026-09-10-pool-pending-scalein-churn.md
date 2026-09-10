@@ -111,7 +111,7 @@ spec:
 - **池冻结实测**：前侧 churn 期间 Pool 控制器停止 reconcile ≥14 分钟（workqueue 指数退避 + 删除期望永不 observe），对应本文「冻结低烧」段；后侧全程 ~27 决策/分钟无冻结。
 - **trim 无门控**：前侧 scale-down 删除 13+ 事件（单轮 TOTAL 143→124）；后侧同场景仅 1 次（maxUnavailable 封顶）。
 - **buffer 口径**：前侧 `bufferCnt` 含 Pending/在途（B=49 / Available=0 实测 trace）；后侧只计 Ready idle。
-- **触发条件修正**：病理与「容量墙」无关——在无容量墙（50m 超轻模板、远低于节点余量）条件下同样复现；充分条件是「慢启动（readiness 70s > pool_acquisition_timeout 30s）+ 突发负载」使在途+Pending 堆积越界、supply 经失败潮塌缩。上游 #1423 的 1355 Pending 超限是 terminating 计数缺陷的症状而非根因。
+- **触发条件修正**：病理与「容量墙」无关——在无容量墙（50m 超轻模板、远低于节点余量）条件下同样复现；充分条件是「慢启动（readiness 70s > pool_acquisition_timeout 30s）+ 突发负载」使在途+Pending 堆积越界、supply 经失败潮塌缩。定量门槛 `alloc > 2×supply + 3×midpoint`（推导见 [触发条件证据链](../wiki/opensandbox-pool-scalein-trigger-evidence-chain.md)，同时解释小池不可触发与 <1/3 水位触发）。上游 #1423 的 1355 Pending 超限是 terminating 计数缺陷的症状而非根因。
 - **残留**：后侧 supply 塌缩后仍会删在途 pod（未 Ready 先删而非跳过），已封顶无正反馈；建议另开「scale-in 跳过 in-flight」小 issue。
 
 ## 关联

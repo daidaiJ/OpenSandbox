@@ -44,7 +44,7 @@
 3. **buffer 口径**：pre `bufferCnt = schedulableCnt - allocatedCnt` 把 Pending/在途计入缓冲（实测 B=49 全是 Pending 时仍被当富余）；#1425 改 `countReadyIdlePods`。
 4. **最老优先删除**：pre 定向淘汰存活最久（≈最接近 Ready）的在途 pod；#1425 排序改为未 Ready 先删、同就绪度新的先删。
 
-**触发数学**（前侧代码推导，实测吻合）：`scaleIn>0 ⟺ bufferCnt > supplyCnt + desiredBufferCnt`，band 内 `desiredBufferCnt = bufferCnt` 时该条件恒假——因此只有「buffer 越界（慢启动/失败潮使在途+Pending 堆积）+ supply 塌缩（30s 池阻塞失败）」同时发生才触发。上游 #1423 的「容量超限」是缺陷 5（terminating 不计入 totalPodCnt）的症状而非根因；**触发条件是慢启动 + 突发，与容量墙无关**——本次 MVP 已在无容量墙（50m×400=20c ≪ 节点余量）条件下复现。
+**触发数学**（前侧代码推导，实测吻合；完整推导与三推论见 [触发条件证据链](opensandbox-pool-scalein-trigger-evidence-chain.md)）：`scaleIn>0 ⟺ bufferCnt > supplyCnt + desiredBufferCnt`，band 内 `desiredBufferCnt = bufferCnt` 时该条件恒假——因此只有「buffer 越界（慢启动/失败潮使在途+Pending 堆积）+ supply 塌缩（30s 池阻塞失败）」同时发生才触发。上游 #1423 的「容量超限」是缺陷 5（terminating 不计入 totalPodCnt）的症状而非根因；**触发条件是慢启动 + 突发，与容量墙无关**——本次 MVP 已在无容量墙（50m×400=20c ≪ 节点余量）条件下复现。
 
 ## 4. 残留确认（方案 §4 预判成立）
 
