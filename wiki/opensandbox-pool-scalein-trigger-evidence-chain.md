@@ -188,6 +188,19 @@ C ≤ (alloc + supply) / 3                                  （百分比预算�
 3. **监控告警四件套**：decision-rate 掉零（冻结前兆，前侧核心信号）；scale-down 删除速率 vs 沙箱释放速率分离（自噬标志）；bufferCnt 与 Available 口径长期偏差（误计信号）；Pending 堆积且 message 含 `Too many pods`（max-pods 扩容信号）；
 4. **升级 SOP**：#1425 以 chart 一体升级（CRD 随行）；灰度单池用「决策日志 caller 行号指纹」验收新二进制接管（前 ：1119 / 后 ：1132）；上线前按 §5 复现配方缩比压测、判定表逐项核对；保留回滚预案。
 
+### 11.4 生产风暴后遗症「资源滞留 + 新建不起来」：机理、取证与止血
+
+四个叠加机制（生产 13 节点形态，A/B 终态「alloc 99 + 25 Pending 冻结」是其缩比版）：
+
+1. **控制器冻结期零清理**——风暴中 scalePool 反复出错 → workqueue 指数退避 + 删除期望（默认 5min）永不满足 → Pool 脱离管控：不补货、不分配、不清理，新请求全部堵死。**「建不起来」的直接原因。**
+2. **删除潮 × 30s 默认 grace × terminating 不可见缺陷**——Terminating pod 占资源/pod 槽位最长 30s+（节点越忙越久），而前侧不计入 totalPodCnt → 控制器当作容量已空继续创建 → Running+Terminating 双份占用，节点资源、max-pods、namespace 配额（~900c）三墙齐打满。
+3. **Pending 滞留反向堵塞**——Pending 占配额与 pod 计数不提供服务，前侧还误计入 bufferCnt；新请求排在僵尸后面。
+4. **alloc 高位钉死（长尾）**——风暴期间分配出去的沙箱带 1800/3600s 超时，业务放弃也要等超时回收 → AVAILABLE 长期为 0，风暴结束后仍建不起来几十分钟到数小时。
+
+取证五步：① `logs --since=15m | grep -c "Scale pool decision"` ≈0 即冻结；② `grep -c Terminating`；③ Pending pod conditions message 分类（Too many pods / quota / 资源不足）；④ `describe resourcequota`（used vs hard）；⑤ BatchSandbox 总数 vs 业务活跃数 + 池 TOTAL/ALLOCATED/AVAILABLE。
+
+止血（按序）：① `rollout restart` controller（冻结唯一解法，重启即清卡死期望）；② 按业务确认批量 DELETE 僵尸沙箱让 alloc 回落；③ idle 池 pod 卡 Terminating 用 `--grace-period=0 --force`（勿用于有会话 pod）；④ 低谷期删池重建（alloc 归零，代价是容量短暂清零）；⑤ 治本 = 合 #1425 + §11.2 配置对齐。
+
 ## 12. 证据索引
 
 | 主张 | 证据 |
