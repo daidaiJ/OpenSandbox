@@ -18,7 +18,7 @@
 | 测试池 | `bisect-churn` 锁 worker 103（nodeAffinity，不碰 master 现网服务）；50m/32Mi、poolMin 20、poolMax 400、buffer 10-40、`recycleStrategy: Delete` |
 | 慢启动模拟 | 主容器 `sleep 70 && touch /tmp/ready` + readinessProbe，pod 70s 才 Ready（对应上游 kata-qemu 60s+） |
 | 负载（ramp4） | 基座 10 批 × 30 沙箱（30s 间隔）+ 突发 2 波 × 50，沙箱 timeout 3600，共 400 创建请求 |
-| 服务端参数 | `pool_acquisition_timeout=30s`（默认）、创建超时 240s（现网配置） |
+| 服务端参数 | `sandbox_create_timeout_seconds`=60s（默认，未配 240s）、`pool_acquisition_timeout_seconds`=60s（CM 实配）；readiness 70s 超出两者 → 波次请求 60s 总闸 `POD_READY_TIMEOUT` 阵亡 |
 
 指纹自检：A 侧 `bufferCnt := schedulableCnt - allocatedCnt`、无 `countReadyIdlePods`；B 侧 `countReadyIdlePods` / `desiredBufferCount` / `pool_scaling_stability_test.go` 均在。
 
@@ -28,7 +28,7 @@
 
 | 指标 | 前（A） | 后（B，~~无效~~） | 后重测（B′，§8 有效） |
 |---|---|---|---|
-| `POD_READY_TIMEOUT` 失败 | 301/400（波次请求 100% 在 30s 池阻塞线阵亡） | — | ~303/400（与 A 持平，成功率与修复无关） |
+| `POD_READY_TIMEOUT` 失败 | 301/400（波次请求 100% 在 60s 创建总超时阵亡：readiness 70s > 60s） | — | ~303/400（与 A 持平，成功率与修复无关） |
 | scale-down 删除（SuccessfulDelete 事件） | **13+**（事件保留期截断；实测 TOTAL 143→124 单轮 -19） | **1** | 96 次日志执行（事件通道被淹没，见 §8 备注），每轮 ≤25% 封顶 |
 | 池控制器连续性 | **冻结 ≥14 分钟**：03:26Z 起零 Pool reconcile（两次直接探测证实），wave 2 完全无人处理 | 持续 reconcile：~27 决策/分钟（wave 期间实测），drain 期 44 决策/3 分钟，**无冻结** | **全程连续**：869 决策，最大空窗 ≤1 分钟，无冻结 |
 | buffer 口径 trace | `bufferCnt` 含 Pending/在途：B=49 / Available=0；B=10 / A=0 同时出现 | buffer 只计 Ready idle | buffer 只计 Ready idle：bufferCnt=0 实时 trace |
@@ -59,7 +59,7 @@
 1. 双点对照镜像：`0d82d87b^` / `0d82d87b` 各构建 `COMPONENT=controller`（buildx 需 `--build-arg GOPROXY=https://goproxy.cn,direct`，内网 proxy.golang.org 不通）。
 2. `docker save` → `k3s ctr images import` 两个节点；deployment 引用 `docker.io/library/controller:<tag>`（pullPolicy IfNotPresent）。
 3. CRD 必须随侧切换：前 = fork chart 渲染版（无 `status.updated`，chart 模板文件需先剥 `{{ }}`）；后 = `config/crd/bases/sandbox.opensandbox.io_pools.yaml`（原生 YAML）。
-4. 池模板 + ramp4 脚本见集群 `/tmp/bisect/`（pool-bisect-churn.yaml / ramp4.sh / sample.sh / monitor.sh）。关键标定：**readiness 延迟 70s > pool_acquisition_timeout 30s**，保证等新 pod 的沙箱必然失败 → supply 塌缩 → 在途搁浅。
+4. 池模板 + ramp4 脚本见集群 `/tmp/bisect/`（pool-bisect-churn.yaml / ramp4.sh / sample.sh / monitor.sh）。关键标定：**readiness 延迟 70s > server 创建总超时 60s（默认值）**，保证等新 pod 的沙箱必然 `POD_READY_TIMEOUT` 失败 → supply 塌缩 → 在途搁浅。
 5. 监控用 `kubectl logs -f` 流式落盘 + 15s 采样双通道（控制器日志 10MB 轮转极快，事后取不回）。
 
 ## 6. 环境复原清单
@@ -109,7 +109,7 @@
 | TOTAL 轨迹 | 锯齿自噬 143→124→145→132→143→124，冻结在 124 | 平滑爬升 42→137；每波后**一次性收缩** 137→108、138→108 并收敛 |
 | 删除执行 | 16 事件（窗口截断口径）+ 单轮 TOTAL -19 | 96 次执行、**每轮 ≤25% 封顶**：基座期 36 次小步 buffer 超限修剪 + 每波 30×2 |
 | buffer 口径 | 含 Pending/在途（B=49 / Available=0） | Ready-only：**bufferCnt=0 实时 trace**，在途不再计入 buffer |
-| 请求成功率 | 99/400 | ~97/400（**持平**——成功率由 30s 池阻塞线 vs 70s 就绪决定，与修复无关） |
+| 请求成功率 | 99/400 | ~97/400（**持平**——成功率由 60s 创建总超时 vs 70s 就绪决定，与修复无关） |
 | Pending | 25 堆积冻结 | 3（103 节点 pod 上限墙 `Too many pods`，调度器行为，非控制器病理） |
 | 终态 | alloc 99 + 25 Pending 冻结 | alloc 98 / total 108 = alloc + bufferMin **精确收敛** |
 | 病理标志 | supply>0 ∧ scaleIn>0 并存且正反馈循环 | 波次瞬间并存（supply=33→trim 30）但**单轮收敛、不复发** |
