@@ -55,6 +55,8 @@
 | [隔离会话池化落地最佳实践 SOP](opensandbox-isolated-sessions-pool-mode-best-practices-sop.md) | 场景决策表、隔离池部署验收清单（四前置+smoke）、业务接入与会话生命周期规范（SDK 模板+错误语义表）、run 编码规范（exit/超时/env/大输出）、监控告警与故障 runbook、反模式清单与基线速查 | 落地 SOP（已实测） |
 | [池化沙箱日志与产物留存方案](opensandbox-pool-log-artifact-retention.md) | 既定路线：hostPath+日志易采日志、agent CLI 直推 S3 产物；目录规范、凭据注入、清理与验收 | 落地方案 |
 | [K8s 池模式（无 pause/resume）文档覆盖度回顾与优先级建议](opensandbox-pool-mode-wiki-gap-analysis-and-roadmap.md) | 盘点 wiki 32 篇 + exporter 8 cookbook 已覆盖面；缺口清单 P0（Runbook/监控告警/升级 SOP）/P1（容量压测/日志留存/安全加固/多部门接入）/P2 与落地节奏 | 规划建议 |
+| [PR #1425 前后对照：ubuntu k3s 二分复现 + 突发创建相关 issue/PR](opensandbox-pr1425-k3s-bisect-burst-plan.md) | 双节点 k3s 上 controller 镜像 A/B（`0d82d87b^` vs `0d82d87b`）验证 trim 自噬；缩比压测配方；K8s/SDK 两层突发创建相关修复盘点 | 验证方案 |
+| [PR #1425 前后 A/B 对照验证报告](opensandbox-pr1425-k3s-ab-verification.md) | A/B 实测：前侧 trim 删在途 + 池控制器冻结 ≥14min，后侧零冻结/删除封顶；触发条件修正（慢启动+突发，非容量墙）；复现配方与残留确认 | 验证报告 |
 
 ## 参考
 

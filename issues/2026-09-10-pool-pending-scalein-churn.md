@@ -5,7 +5,7 @@
 | 现象 | Pool 模式压测中销毁的池 pod 持续多于 running，伴随 20-30 个 pod 长期 Pending |
 | 环境 | poolMin=20 / poolMax=400 / bufferMin=4 / bufferMax=40；池模板 2c4G；namespace 配额余量 900c；13 个候选节点（nodeAffinity + 污点容忍）；压测 30min、负载按 40 一档递增至 ~100 并发 |
 | 日期 | 2026-09-10 |
-| 状态 | 删除侧因果链已闭环（终态数据 293 销毁 / 193 Running 峰值与模型吻合；时间序列四阶段与公式互证）；调度侧 Pending 根因待一条 jsonpath 输出收口 |
+| 状态 | **已闭环并 A/B 验证（2026-09-10）**：删除侧因果链 + 触发条件确认；前（pre1425）坏后（#1425）好，本 fork 应合 #1425；残留一项（scale-in 未 Ready 先删而非跳过）另开小 issue。见第九节与 wiki A/B 报告 |
 | 涉及代码 | `kubernetes/internal/controller/pool_controller.go`（scalePool / pickPodsToDelete）、`allocator.go`（getAvailablePodsFromAlloc）、`internal/utils/pod.go`（ComparePodsForDeletion） |
 
 ## 一、现象清单
@@ -103,6 +103,16 @@ spec:
 2. 病理标志消失：不再出现 `supply>0` 且 scaleIn>0 并存（一边等 pod 一边删 pod）；
 3. `SuccessfulDelete` 计数 vs `Allocate action ... toRelease` 计数分离，确认删除构成；
 4. Pending pod 的 conditions message 按第五节判读归档。
+
+## 九、验证结果（2026-09-10 k3s 双节点 A/B，已闭环）
+
+在 ubuntu 双节点 k3s 上以 `0d82d87b^`（前）vs `0d82d87b`（PR #1425，后）controller 镜像做同需求对照（400 创建请求、同池规格、基座 alloc≈99/98）：**前坏后好，本 fork 应合 #1425**。完整报告见 [wiki/opensandbox-pr1425-k3s-ab-verification.md](../wiki/opensandbox-pr1425-k3s-ab-verification.md)。要点：
+
+- **池冻结实测**：前侧 churn 期间 Pool 控制器停止 reconcile ≥14 分钟（workqueue 指数退避 + 删除期望永不 observe），对应本文「冻结低烧」段；后侧全程 ~27 决策/分钟无冻结。
+- **trim 无门控**：前侧 scale-down 删除 13+ 事件（单轮 TOTAL 143→124）；后侧同场景仅 1 次（maxUnavailable 封顶）。
+- **buffer 口径**：前侧 `bufferCnt` 含 Pending/在途（B=49 / Available=0 实测 trace）；后侧只计 Ready idle。
+- **触发条件修正**：病理与「容量墙」无关——在无容量墙（50m 超轻模板、远低于节点余量）条件下同样复现；充分条件是「慢启动（readiness 70s > pool_acquisition_timeout 30s）+ 突发负载」使在途+Pending 堆积越界、supply 经失败潮塌缩。上游 #1423 的 1355 Pending 超限是 terminating 计数缺陷的症状而非根因。
+- **残留**：后侧 supply 塌缩后仍会删在途 pod（未 Ready 先删而非跳过），已封顶无正反馈；建议另开「scale-in 跳过 in-flight」小 issue。
 
 ## 关联
 
