@@ -28,6 +28,7 @@
 | [客户端池预热与分配延迟 Cookbook（OSEP-0005/0021）](client-pool-warmup-cookbook.md) | client SandboxPool 语义、Python/Kotlin 参数与用法、bufferMin=0 组合策略、坑清单 | `opensandbox-pool-capacity-params.md`、`opensandbox-pool-scaling-mechanism-ops.md` |
 | [凭据注入 Cookbook（OSEP-0012）](credential-vault-cookbook.md) | Vault/Proxy 原理、`/credential-vault` API、fail-closed 前提、fleet MITM 现状与迁移触发条件 | `opensandbox-egress-pool-higress-architecture.md` |
 | [可观测与审计采集 Cookbook（OSEP-0010/0019）](node-agent-observability-cookbook.md) | 组件 OTel 指标/日志、egress 审计事件、nodeagent 归档 v1 范围（池化不适用）、落地建议 | `opensandbox-controller-multi-replica-tuning.md` |
+| [Pool 销毁风暴：缺陷定位与修复验证（上游 #1423/#1425）](pool-churn-defect-fix-verification.md) | 一文具全：生产现象与快照反推、本地三缺陷链（L1-L3）与上游六缺陷（U1-U6）对照、触发数学与风暴必要条件（N1-N7）、PR #1425 六项修复映射、k3s A/B 重测判定（含无效运行取证）、残留与后续行动、对策清单（代码/配置/运维/止血）、recycleStrategy 选型 | `opensandbox-pr1425-k3s-ab-verification.md`、`opensandbox-pool-scalein-trigger-evidence-chain.md` |
 
 ## 上游功能跟踪速览（2026-08-31，upstream/main @ `f91f153c`）
 
@@ -54,4 +55,6 @@ sandbox-management-cookbook ──┬── pool-pod-template-cookbook ──┬
 client-pool-warmup-cookbook ──┬── pool-pod-template-cookbook
                               └── wiki/opensandbox-pool-capacity-params / pool-scaling-mechanism-ops
 node-agent-observability-cookbook ── credential-vault-cookbook（fleet egress 引入条件）
+pool-churn-defect-fix-verification ──┬── issues/2026-09-10-pool-pending-scalein-churn（问题侧主记录）
+                                      └── wiki/opensandbox-pr1425-k3s-ab-verification / pool-scalein-trigger-evidence-chain
 ```
