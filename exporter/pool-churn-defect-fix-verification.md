@@ -200,6 +200,41 @@ chart 一体升级（**CRD 随行**）→ 灰度单池 → **镜像双验证**�
 | **Restart** | pod exec `kill 1` → kubelet 拉起新容器实例；默认 30s×3 重试，耗尽走删除兜底；annotation 可配 blacklist/retryInterval/maxRetries/restartCommand | **两个缺口**：emptyDir 卷跨重启保留（会话状态泄漏给下一租户）、pod IP/netns 复用；init 容器不重跑、节点热点固化 | 可信/同租户高周转——切换前必须验证会话状态落点 + PID 1 信号链 + sidecar blacklist |
 | **Noop** | 不做任何动作 | 依赖上层协议自初始化 | 会话协议自初始化场景 |
 
+## 十一、业务设计优化 TODO 规划（控制器相关）
+
+背景：现网是「审批制 namespace + 池化主路径」的多部门智能体服务，控制器侧销毁风暴已解决；下一阶段优化围绕**隔离、路由、可观测**三条线展开。
+
+### 11.1 多池隔离（P1）
+
+- **动机**：突发型与慢启动负载混池互相拖累（慢启动突发叠在大 alloc 基座上最危险，正是本次风暴的触发形态）；可信/不可信负载对 recycleStrategy 要求不同（Delete vs Restart，见 §十）；敏感负载需要独立 egress 管控。混池下任何一类负载的病理都会放大爆炸半径。
+- **TODO**：
+  1. 建立池分类台账：短任务共享池 / 部门专属池 / 长会话池 / 敏感池，每池记录 alloc 峰值、典型波次规模、readiness P95、节点 max-pods 与配额余量；
+  2. 拆/不拆判定规则化：readiness P95 或突发特征差异显著、或信任等级不同才拆——拆池有固定成本（每池 bufferMin 份 idle + poolMin 保底，多份重复占用资源），不为「看起来干净」拆池；
+  3. 多池下的控制器并发评估：`MaxConcurrentReconciles` 默认 Pool=16 / BatchSandbox=32，且 chart 未暴露 `--concurrency` flag——池数量上来之前需自行加 args 并压测验证单控制器承载；
+  4. 调度打散配置（§七 maxSkew + 软反亲和）随池模板固化，多池共享候选节点时防止池间互相挤占同一批节点。
+
+### 11.2 label 选择器与池路由启用（P1-P2）
+
+- **动机**：server 池模式下 **labels 是唯一主动路由条件**（image/resource/nodeselector 均为直通被动项）——部门专属池、敏感池分流完全依赖 label 规范落地，这是多池隔离（§11.1）的前置开关。
+- **TODO**：
+  1. 制定 label 规范：部门 / 业务线 / 信任等级 / 池类型四类标签，与业务层 user→department→namespace 审批映射对齐；
+  2. Pool CR 打 label + server 侧 poolRef 路由启用，先灰度单一部门专属池验证端到端匹配；
+  3. **风险项：上游 #1433（poolRef 修改会杀在用 Pod）**——路由规则一旦启用即视为稳定契约，不随业务调整随意变更，变更须走审批 + 低峰窗口；
+  4. 验证 Profile ConfigMap 热加载与三层回退路径在多池/多 label 下的行为。
+
+### 11.3 控制器代码侧优化（P2，提上游或随 fork）
+
+1. **scale-in 跳过 in-flight**（清 §9.1 残留）：`pickPodsToDelete` 对未 Ready idle pod 直接跳过或单列低优先级；
+2. **scale-in 滞回/cooldown**：buffer 越带需持续 N 个 reconcile 才删、删除后一窗口抑制再创建，消「建 30 删 30」churn；
+3. **需求驱动扩容**：把 server 侧等待中请求数注入 desired 计算，替代 25% 预算式盲目追赶，突发一次到位；
+4. **可观测性**：暴露 decision-rate、scaleIn/delete 执行速率、expectations 未满足时长等 metrics（呼应上游 #1650/#1651），接入 §9.3 告警四件套。
+
+### 11.4 节奏建议
+
+- **先监控后优化**：告警四件套先常态化上线（防复发视线），metrics 上游落地后再切换自研指标；
+- **label 规范先行、拆池跟随**：路由 label 与池分类一次规划、分步落地，避免两次变更；
+- **变更即回归**：每次池参数/拓扑/镜像变更后，按 §八判定口径跑缩比压测（200 并发档）确认无病理复现。
+
 ## 关联（上游）
 
 - [#1423 Pool controller: hot reconcile loop + unthrottled scale-down oscillation](https://github.com/opensandbox-group/OpenSandbox/issues/1423) · [#1425 stabilize pool scaling](https://github.com/opensandbox-group/OpenSandbox/pull/1425)

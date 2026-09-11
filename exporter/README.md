@@ -28,7 +28,7 @@
 | [客户端池预热与分配延迟 Cookbook（OSEP-0005/0021）](client-pool-warmup-cookbook.md) | client SandboxPool 语义、Python/Kotlin 参数与用法、bufferMin=0 组合策略、坑清单 | `opensandbox-pool-capacity-params.md`、`opensandbox-pool-scaling-mechanism-ops.md` |
 | [凭据注入 Cookbook（OSEP-0012）](credential-vault-cookbook.md) | Vault/Proxy 原理、`/credential-vault` API、fail-closed 前提、fleet MITM 现状与迁移触发条件 | `opensandbox-egress-pool-higress-architecture.md` |
 | [可观测与审计采集 Cookbook（OSEP-0010/0019）](node-agent-observability-cookbook.md) | 组件 OTel 指标/日志、egress 审计事件、nodeagent 归档 v1 范围（池化不适用）、落地建议 | `opensandbox-controller-multi-replica-tuning.md` |
-| [Pool 销毁风暴：缺陷定位与修复验证（上游 #1423/#1425）](pool-churn-defect-fix-verification.md) | 一文具全：原始问题（四段振荡）→ 代码定位×上游 #1423 双重证据链（L1-L3/U1-U6）→ PR #1425 修复动作 → 止血完成情况（A/B 实测）→ 我方修复动作（合入+升级镜像+池配置优化 bufferMin20/bufferMax60+maxSkew/软反亲和）→ 镜像双验证（静态符号验尸+动态接管三件套）→ 200 并发压测确认解决 → 残留小缺陷与运维对策 | `opensandbox-pr1425-k3s-ab-verification.md`、`opensandbox-pool-scalein-trigger-evidence-chain.md` |
+| [Pool 销毁风暴：缺陷定位与修复验证（上游 #1423/#1425）](pool-churn-defect-fix-verification.md) | 一文具全：原始问题（四段振荡）→ 代码定位×上游 #1423 双重证据链（L1-L3/U1-U6）→ PR #1425 修复动作 → 止血完成情况（A/B 实测）→ 我方修复动作（合入+升级镜像+池配置优化 bufferMin20/bufferMax60+maxSkew/软反亲和）→ 镜像双验证（静态符号验尸+动态接管三件套）→ 200 并发压测确认解决 → 残留小缺陷与运维对策 → 业务设计优化 TODO（多池隔离/label 选择器池路由/控制器代码优化） | `opensandbox-pr1425-k3s-ab-verification.md`、`opensandbox-pool-scalein-trigger-evidence-chain.md` |
 
 ## 上游功能跟踪速览（2026-08-31，upstream/main @ `f91f153c`）
 
