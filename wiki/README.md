@@ -58,6 +58,8 @@
 | [PR #1425 前后对照：ubuntu k3s 二分复现 + 突发创建相关 issue/PR](opensandbox-pr1425-k3s-bisect-burst-plan.md) | 双节点 k3s 上 controller 镜像 A/B（`0d82d87b^` vs `0d82d87b`）验证 trim 自噬；缩比压测配方；K8s/SDK 两层突发创建相关修复盘点 | 验证方案 |
 | [PR #1425 前后 A/B 对照验证报告](opensandbox-pr1425-k3s-ab-verification.md) | A/B 实测：前侧 trim 删在途 + 池控制器冻结 ≥14min，后侧零冻结/删除封顶；触发条件修正（慢启动+突发，非容量墙）；复现配方与残留确认 | 验证报告 |
 | [Pool scale-in 自噬触发条件证据链](opensandbox-pool-scalein-trigger-evidence-chain.md) | 生产现象→上游 #1423 同构→触发数学（`alloc > 2×supply + 3×midpoint`）→A/B 实证→排除资源限制→前后调谐对照→风暴必要条件→合入后承压判定→对策清单（代码/配置/业务运维） | 证据链整合+对策 |
+| [execd init 模式实施指导（OSEP-0018）](opensandbox-execd-init-rollout-guide.md) | 🚧 **池模式视角**：逐项能力收益判定表（Pool task=subreaper vs 模板 PID1）、显式成本账（≈0 常驻 vs eBPF 提权/运维）、三步落地路线（hardening+Landlock 全量→长会话池 PID1→敏感池 eBPF）与明确不追的收益；附**命令执行审查**与**网络审查**分层矩阵 | 实施指导（默认关闭，待灰度） |
+| [池模式调谐与运行时优化指导](opensandbox-pool-tuning-and-assign-guide.md) | 自动分配全链路（poolRef 三取值/谓词五件套逐条/Profile ConfigMap 热加载）、均衡策略 LeastAllocated vs MostAllocated 选型、**多池收益/成本评估表（业务背景视角，含拆/不拆判定规则与验收指标）**、回收三策略选型（Delete/Restart/Noop）、业务方申请契约与检查清单、8 条坑清单 | 落地指导 |
 
 ## 参考
 
