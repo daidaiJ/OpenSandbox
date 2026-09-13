@@ -54,7 +54,19 @@ type: project
 | `nodeselector` | sandbox 的 `nodeSelector`/nodeAffinity（required）必须被 **pool 的 labels + pool 模板 nodeSelector 合并集**满足 | 池模式下业务传不了 nodeSelector，实际由池模板决定；跨节点域调度 = 按节点域拆池 | `nodeSelector key "topology" not found in pool` |
 | `labelselector`（**默认未启用**） | 对配置的每个 label key，**BatchSandbox 与 Pool 的 label 值必须相等**（都存在且相等） | 启用后：业务侧给沙箱打 label（如 `tier=long-session`），池打同 key label，实现"业务标签路由到对应池" | `label key "tier" missing on sandbox` / 值不等 |
 
-**给我们的启示**：当前默认配置下，异构池路由实际靠 `image`（不同模板镜像天然分流）+ `resource` + `nodeselector`；要按"部门/会话类型"这类业务语义路由，必须启用 `labelselector` 谓词（§三的 Profile 配置），这是把"业务方申请语义"接进自动分配的唯一通用钩子。
+**关键事实——谓词输入从哪来**：谓词比对的全部输入是 BatchSandbox 的 `spec.template`（容器镜像/requests/nodeSelector）和 metadata labels。而**经 server 的池模式申请根本不生成 `spec.template`**（`_create_workload_from_pool` 只填 replicas/poolRef/taskTemplate/expireTime + metadata），因此：
+
+| 谓词 | 期望的业务输入 | 经 server 池模式申请时 | 直接建 BatchSandbox CR 时 |
+|---|---|---|---|
+| `capacity` | replicas（业务不可传，恒 1） | **唯一真正过滤的谓词**（`poolMax - Allocated >= 1`） | 同左（replicas 可 >1） |
+| `image` | 沙箱模板容器镜像 | **直通**（template 为 nil 即 pass） | 逐容器精确字符串匹配池模板镜像集 |
+| `resource` | `resource_requests` | **直通**（池模式分支不接收该参数，仅模板模式有） | requests 聚合逐项 ≤ 池模板 |
+| `nodeselector` | nodeSelector/affinity | **直通**（template 为 nil） | 必须被池 labels+nodeSelector 合并集满足 |
+| `labelselector`（**默认未启用**） | **create 请求的 `labels` 字段**（真实落入 BatchSandbox metadata） | **业务侧唯一可主动路由的谓词** | 同左 |
+
+**结论**：业务方经 server API"按条件选池"的现实手段只有两个——`poolRef` 定向，或 `labels` + 启用 labelselector 谓词做语义路由；`image/resource/nodeselector` 三个谓词只在**绕过 server 直接建 CR**（平台编排/手写 CR）时才真正逐条比对。异构池在 server 路径上的分流效果来自"池模板本来就不同 + labelselector tier 标签"，而非请求条件匹配。
+
+给我们的启示：要把"部门/会话类型"这类业务语义接进自动分配，唯一通用钩子是启用 `labelselector` 谓词（§三的 Profile 配置）+ 业务申请时带对应 label。
 
 ## 三、均衡策略配置
 
@@ -180,8 +192,8 @@ data:
 | `extensions.poolRef` | 池名 / `"*"`（自动分配）；**互斥限制**：池模式下 `volumes`、`networkPolicy`（egress settings）、`platform` 传了直接报错（`batchsandbox_provider.py:158-170`）——卷与网络管控都在池模板层面预置，业务请求带不动 |
 | `entrypoint` / `env` | 经 taskTemplate 在**分配时**注入绑定的 pod（用户信息注入走这条路，见[分配时注入 doc](opensandbox-pool-allocation-time-injection.md)） |
 | `expires_at` | TTL，到期回收，可续约 |
-| `labels` | 若启用 labelselector 谓词，则参与池路由；同时也是 netpol `pool-name` 类策略的匹配面 |
-| `resource_requests` | 必须 ≤ 所在池模板 requests，否则 capacity 分配阶段被拒 |
+| `labels` | **池路由的唯一主动条件**：若启用 labelselector 谓词则参与选池（需池侧打同 key label）；同时也是 netpol 策略的匹配面。注意 `image`/`resource_requests`/nodeSelector 类条件在池模式申请里**不参与谓词比对**（spec.template 为空，见 §二） |
+| `resource_requests` | **池模式分支不接收**（仅模板模式生效），不存在"超池规格被拒"的路径 |
 
 **池管理（平台管理员 → server pool API 或直接 Pool CR）**：`POST/GET/PATCH/DELETE /pools`（`pool_service.py`），manifest 即 `template + capacitySpec` 四参数；回收/伸缩/更新策略目前 server pool API **不透出**（只建 template+capacity），要配 `recycleStrategy` 等需直接写 Pool CR——管理 SOP 里应固定"CR 是策略源，API 是容量源"的分工。
 
@@ -202,6 +214,7 @@ data:
 6. **labelselector 是唯一业务语义路由钩子**：不启用它，自动分配对"部门/会话类型"完全无感，只会按镜像/资源/节点分流。
 7. **MostAllocated 换缩容**：切换策略后空池才能回收，监控要加"池空置率"视角，否则缩容收益静默丢失。
 8. **混版是常态不是事故**：任何"必须全池同版本"的假设（如按池统一升级 egress 配置）都要改成蓝绿池模式执行。
+9. **image/resource/nodeselector 谓词在 server 池模式路径上直通**：业务请求带镜像/资源/节点约束"选池"是不成立的——分配真实可用的路由条件只有 `poolRef` 和 `labels`（labelselector）；调试分配行为时不要在这三个谓词上找原因。
 
 ## 八、推荐落地路线
 
