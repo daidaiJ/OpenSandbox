@@ -37,6 +37,8 @@
 | [K8s 池模式卷类型、配置限制与副作用实践](opensandbox-pool-mode-volumes-and-storage-practice.md) | spec 三后端（host/pvc/ossfs）支持矩阵、池化拒绝请求卷、回收策略×数据残留（Restart/Noop 泄漏坑）、RWX/RWO 副作用、S3+NAS 落地决策树 | 2026-09-03 |
 | [K8s 池模式三大部署核心配置：controller / server / Pool CR](opensandbox-pool-deploy-core-config-guide.md) | helm values→flag 映射与版本红线、server K8s 运行时配置节（含 `[store]` 无状态澄清：仅存快照元数据、默认 sqlite 不必配 PG）、Pool CR spec/status 全字段、从零到可用 checklist | 2026-09-03 |
 | [池模式启用隔离会话：配置配方、场景边界、得失比对与生产评估](opensandbox-isolated-sessions-pool-mode-enable-and-assessment.md) | ubuntu k3s 实测：池模板启用 bwrap 隔离四前置（bwrap/session-gate/SYS_ADMIN+NET_ADMIN/upper）、与 /command 及 native /session 三通道比对、得失表；**结论：有条件可生产**（binds 损坏、超时杀会话、配额仅分配时等规避集 + 独立池 checklist） | 2026-09-08 |
+| [KEDA 部署验证报告：Redis 队列驱动 Server 扩缩容（k3s 实测）](opensandbox-keda-redis-autoscale-validation.md) | ubuntu k3s 实测闭环（40 条队列→server 1↔3 副本）：版本红线（K8s 1.18↔1.26+）、精准镜像 digest、CRD/APIService 清单、**权限分层**（管理员一次性装 vs 业务开发自助）、测试→生产（2.10.1→2.8.2）差异对照与迁移七步 | 2026-09-13 |
+| [KEDA 服务接入 SOP：任意 Deployment 事件化弹性扩缩](opensandbox-keda-integration-sop.md) | 业务开发自助五步法：可水平扩判定（含 ScaledJob 分支）、信号源选型、ScaledObject/TriggerAuthentication 完整模板与 `副本=ceil(积压/listLength)` 换算、双向验证验收表、运维操作与 7 条坑清单 | 2026-09-13 |
 
 ## 方案设计
 
