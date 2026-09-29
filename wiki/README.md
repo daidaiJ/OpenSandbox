@@ -62,6 +62,7 @@
 | [Pool scale-in 自噬触发条件证据链](opensandbox-pool-scalein-trigger-evidence-chain.md) | 生产现象→上游 #1423 同构→触发数学（`alloc > 2×supply + 3×midpoint`）→A/B 实证→排除资源限制→前后调谐对照→风暴必要条件→合入后承压判定→对策清单（代码/配置/业务运维） | 证据链整合+对策 |
 | [execd init 模式实施指导（OSEP-0018）](opensandbox-execd-init-rollout-guide.md) | 🚧 **池模式视角**：逐项能力收益判定表（Pool task=subreaper vs 模板 PID1）、显式成本账（≈0 常驻 vs eBPF 提权/运维）、三步落地路线（hardening+Landlock 全量→长会话池 PID1→敏感池 eBPF）与明确不追的收益；附**命令执行审查**与**网络审查**分层矩阵 | 实施指导（默认关闭，待灰度） |
 | [池模式调谐与运行时优化指导](opensandbox-pool-tuning-and-assign-guide.md) | 自动分配全链路（poolRef 三取值/谓词五件套/Profile ConfigMap 热加载与三层回退）、**谓词输入来源修正（server 池模式下 image/resource/nodeselector 直通，labels 是唯一主动路由条件）**、LeastAllocated vs MostAllocated 选型、多池收益/成本评估（拆/不拆判定规则）、回收三策略选型、业务方申请契约与检查清单、9 条坑清单 | 落地指导 |
+| [OpenShell 可移植策略设计](opensandbox-openshell-portable-policy-design.md) | 从 OpenShell（commit `1358941` 源码核对）筛选可移植项：前提 `fail-open but honest`（延续 OSEP-0018）、A 档五项（audit/enforce 灰度、结构化事件、SSRF 基线、凭据独立双边界、run_as+策略 diff）、B 档三项（边界确认降级为可观测状态、隔离会话 FS allowlist、凭据轮转 readiness）、C 档四项不移植及替代路径（L7 交 Higress/Cilium） | 方案设计（未实施） |
 
 ## 参考
 
