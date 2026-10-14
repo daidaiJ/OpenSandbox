@@ -1,4 +1,4 @@
-# Copyright 2025 Alibaba Group Holding Ltd.
+# Copyright 2025 The OpenSandbox Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -80,13 +80,25 @@ class TestSandboxLifecycle:
             )
 
     def test_create_request_rejects_lifecycle_with_pool_ref(self):
-        with pytest.raises(ValidationError, match="lifecycle cannot be used together with poolRef"):
+        # OSEP-0024: lifecycle hooks conflict with pool mode, but the
+        # hooks-free idlePolicy container is allowed through.
+        with pytest.raises(
+            ValidationError,
+            match="lifecycle hooks cannot be used together with poolRef",
+        ):
             CreateSandboxRequest(
                 extensions={"poolRef": "default/pool"},
                 lifecycle=SandboxLifecycle(
                     preStart=LifecycleHook(command=["true"]),
                 ),
             )
+
+        request = CreateSandboxRequest(
+            extensions={"poolRef": "default/pool"},
+            lifecycle=SandboxLifecycle(idlePolicy={"idleTimeoutSeconds": 300, "onIdle": "pause"}),
+        )
+        assert request.lifecycle is not None
+        assert request.lifecycle.idle_policy is not None
 
     @pytest.mark.parametrize(
         ("hook", "expected"),
@@ -212,7 +224,6 @@ class TestPVC:
         }
 
     def test_serialization_with_provisioning_hints(self):
-        """Provisioning hints should serialize with aliases."""
         backend = PVC(
             claim_name="my-pvc",
             storage_class="ssd",
@@ -802,7 +813,6 @@ class TestCreateSandboxRequestPoolMode:
         assert request.env == {"KEY": "value"}
 
     def test_pool_mode_rejects_snapshot_id_with_pool_ref(self):
-        """snapshotId and poolRef cannot be used together."""
         with pytest.raises(ValidationError) as exc_info:
             CreateSandboxRequest(
                 snapshotId="snap-001",
@@ -837,7 +847,6 @@ class TestCreateSandboxRequestPoolMode:
             )
 
     def test_pool_mode_normalizes_blank_snapshot_id(self):
-        """Blank snapshotId (e.g. whitespace) should be normalized to None in pool mode."""
         req = CreateSandboxRequest(
             extensions={"poolRef": "my-pool"},
             snapshotId="   ",
@@ -845,7 +854,6 @@ class TestCreateSandboxRequestPoolMode:
         assert req.snapshot_id is None
 
     def test_pool_mode_ignores_blank_pool_ref(self):
-        """Blank poolRef should not trigger pool mode."""
         with pytest.raises(ValidationError):
             CreateSandboxRequest(
                 extensions={"poolRef": "   "},

@@ -1,4 +1,4 @@
-// Copyright 2026 Alibaba Group Holding Ltd.
+// Copyright 2026 The OpenSandbox Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -87,11 +87,36 @@ const (
 	EnvMitmproxyPort             = "OPENSANDBOX_EGRESS_MITMPROXY_PORT"
 	EnvMitmproxyScript           = "OPENSANDBOX_EGRESS_MITMPROXY_SCRIPT"
 	EnvMitmproxyUpstreamTrustDir = "OPENSANDBOX_EGRESS_MITMPROXY_UPSTREAM_TRUST_DIR"
-	EnvMitmproxySslInsecure      = "OPENSANDBOX_EGRESS_MITMPROXY_SSL_INSECURE"
+	// EnvMitmproxyUpstreamExtraCA: path to a PEM file with one or more extra CA
+	// certificates, passed to mitmproxy ssl_verify_upstream_trusted_ca. Additive
+	// with the system/confdir trust, and applies to every mitmproxy upstream TLS
+	// connection (HTTPS proxy and intercepted origins), not only the proxy hop.
+	EnvMitmproxyUpstreamExtraCA = "OPENSANDBOX_EGRESS_MITMPROXY_UPSTREAM_EXTRA_CA"
+	EnvMitmproxySslInsecure     = "OPENSANDBOX_EGRESS_MITMPROXY_SSL_INSECURE"
+	// EnvExperimentalRevisionRuntime enables the internal OSEP-0023
+	// per-mitmdump revision bootstrap path. It is not a public interception mode.
+	EnvExperimentalRevisionRuntime = "OPENSANDBOX_EGRESS_EXPERIMENTAL_REVISION_RUNTIME"
+	// OSEP-0023 live admission budgets, handed to the mitmdump child with the
+	// revision session bundle. Decrypted-connection and admitted-request caps,
+	// plus the credential transition drain timeout in seconds (1..300).
+	// Operator-owned tuning only; not a public sandbox-user API.
+	EnvRevisionTLSCapacity         = "OPENSANDBOX_EGRESS_REVISION_TLS_CAPACITY"
+	EnvRevisionRequestCapacity     = "OPENSANDBOX_EGRESS_REVISION_REQUEST_CAPACITY"
+	EnvRevisionDrainTimeoutSeconds = "OPENSANDBOX_EGRESS_REVISION_DRAIN_TIMEOUT_SECONDS"
 	// EnvMitmproxyExtraPorts (EXPERIMENTAL): extra TCP dports to intercept,
 	// appended to the always-on 80,443. Comma-separated. May change or be
 	// removed without notice.
 	EnvMitmproxyExtraPorts = "OPENSANDBOX_EGRESS_MITMPROXY_EXTRA_PORTS"
+
+	// EnvUpstreamProxy: chained upstream proxy endpoint ("http://host:port" or
+	// "https://host:port"). When set, the bundled upstream_proxy.py addon is
+	// loaded and all mitm-handled egress is chained through it (fail-closed:
+	// anything that cannot be chained is refused). Empty = disabled.
+	EnvUpstreamProxy = "OPENSANDBOX_EGRESS_UPSTREAM_PROXY"
+	// EnvUpstreamProxyAuth: complete Proxy-Authorization header value sent on
+	// the upstream CONNECT (e.g. "Basic base64(user:pass)"). Requires
+	// EnvUpstreamProxy. Never logged.
+	EnvUpstreamProxyAuth = "OPENSANDBOX_EGRESS_UPSTREAM_PROXY_AUTH"
 
 	// Comma-separated upstream resolvers: literal IP only (optional :port) — no hostnames (see dnsproxy REDIRECT note).
 	EnvDNSUpstream                 = "OPENSANDBOX_EGRESS_DNS_UPSTREAM"
@@ -112,8 +137,12 @@ const (
 	DefaultCredentialProxySocket = "/run/opensandbox/credential-proxy/active.sock"
 	ResolvNameserverCap          = 10
 	DefaultMaxEgressRules        = 4096
-	DefaultDNSUpstreamTimeoutSec = 5
+	DefaultDNSUpstreamTimeoutSec = 2
 	OpenSandboxRootDir           = "/opt/opensandbox"
+	// OSEP-0023 live admission defaults (experimental sidecar only).
+	DefaultRevisionTLSCapacity         = 1024
+	DefaultRevisionRequestCapacity     = 4096
+	DefaultRevisionDrainTimeoutSeconds = 30
 )
 
 func EnvIntOrDefault(key string, defaultVal int) int {
@@ -123,6 +152,21 @@ func EnvIntOrDefault(key string, defaultVal int) int {
 	}
 	v, err := strconv.Atoi(s)
 	if err != nil {
+		return defaultVal
+	}
+	return v
+}
+
+// EnvIntRange returns the env int only when it parses into [min, max];
+// otherwise it returns defaultVal. Operator-owned budgets use this to reject
+// silently-clamped nonsense rather than guessing a replacement value.
+func EnvIntRange(key string, defaultVal, minValue, maxValue int) int {
+	s := strings.TrimSpace(os.Getenv(key))
+	if s == "" {
+		return defaultVal
+	}
+	v, err := strconv.Atoi(s)
+	if err != nil || v < minValue || v > maxValue {
 		return defaultVal
 	}
 	return v

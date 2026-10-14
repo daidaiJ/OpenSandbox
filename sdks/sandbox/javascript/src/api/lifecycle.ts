@@ -1,4 +1,4 @@
-// Copyright 2026 Alibaba Group Holding Ltd..
+// Copyright 2026 The OpenSandbox Authors
 // 
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,6 +18,58 @@
  */
 
 export interface paths {
+    "/sandboxes/{sandboxId}/networkpolicy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unique sandbox identifier */
+                sandboxId: components["parameters"]["SandboxId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Read sandbox network policy
+         * @description For Fsb, reads persisted egress Action Binding intent in the tenant's
+         *     Sandbox CR, not live enforcement state. An absent binding defaults to
+         *     deny-first when an egress handler is configured; this is not proof of
+         *     enforcement on a pool without that handler. Other backends proxy the
+         *     sandbox-side egress service. Requires lifecycle API authentication.
+         */
+        get: operations["getSandboxNetworkPolicy"];
+        /**
+         * Replace the complete sandbox network policy
+         * @description Replaces defaultAction and all rules, rather than merging them. Fsb
+         *     commits the egress binding through FastPath, preserving unrelated bindings
+         *     with UID/generation conflict protection. Success does not imply handler
+         *     convergence. Other backends proxy the sandbox-side egress service.
+         */
+        put: operations["replaceSandboxNetworkPolicy"];
+        post?: never;
+        /**
+         * Delete sandbox network policy rules by target
+         * @description Removes egress rules whose target matches one of the provided
+         *     entries. Matching is by exact target string; unknown targets are
+         *     silently ignored (idempotent). The current defaultAction is
+         *     preserved. Other backends proxy the sandbox-side egress service.
+         */
+        delete: operations["deleteSandboxNetworkPolicyRules"];
+        options?: never;
+        head?: never;
+        /**
+         * Patch sandbox network policy rules
+         * @description Merges egress rules into the current policy using the same semantics
+         *     as the sandbox-side egress service PATCH endpoint: incoming rules
+         *     take priority over existing rules with the same target and replace
+         *     them in place; within one patch payload, the first rule for a target
+         *     wins; existing rules for other targets and the current defaultAction
+         *     are preserved. Fsb commits the merged binding through FastPath with
+         *     UID/generation conflict protection. Other backends proxy the
+         *     sandbox-side egress service.
+         */
+        patch: operations["patchSandboxNetworkPolicy"];
+        trace?: never;
+    };
     "/metrics/events": {
         parameters: {
             query?: never;
@@ -163,6 +215,10 @@ export interface paths {
                  *
                  *     The returned `ErrorResponse.code` is `KUBERNETES::QUOTA_EXCEEDED` and
                  *     `message` carries the Kubernetes admission rejection details.
+                 *
+                 *     This fail-fast behavior applies when the `agent-sandbox` workload
+                 *     provider is used. With the default `batchsandbox` provider, quota
+                 *     exhaustion currently waits for the sandbox creation timeout.
                  */
                 403: {
                     headers: {
@@ -684,7 +740,10 @@ export interface paths {
         put?: never;
         /**
          * Renew sandbox expiration
-         * @description Renew the absolute expiration time of a sandbox.
+         * @description Set the absolute expiration time of a sandbox to the supplied future timestamp.
+         *     This may shorten, preserve, or extend the current expiration.
+         *     The server configuration `server.max_sandbox_timeout_seconds` applies only
+         *     to `timeout` on creation and does not limit this operation.
          */
         post: {
             parameters: {
@@ -776,6 +835,7 @@ export interface paths {
                 200: {
                     headers: {
                         "X-Request-ID": components["headers"]["XRequestId"];
+                        OpenSandboxOrigin: components["headers"]["SandboxOrigin"];
                         [name: string]: unknown;
                     };
                     content: {
@@ -792,6 +852,74 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List fsb templates
+         * @description Lists the current tenant's templates with optional metadata filtering
+         *     (AND logic) and pagination. Results never include other tenants'
+         *     templates.
+         */
+        get: operations["listTemplates"];
+        put?: never;
+        /**
+         * Create a fsb template
+         * @description Declares a golden-image build executed by fast-sandbox.
+         *     Available on Kubernetes-backed runtimes (`kubernetes` and `fsb`);
+         *     501 otherwise (e.g. the Docker runtime).
+         *
+         *     The build is asynchronous: the response carries `status.phase: Pending`;
+         *     poll `GET /templates/{templateId}` until `Succeeded` (or `Failed` with
+         *     `status.message`). Only `Succeeded` templates can back template-based
+         *     sandbox creation. Kernel, execd and guest init are server-side build
+         *     inputs supplied from the `[fsb]` configuration, not client fields.
+         *
+         *     Templates are tenant-private: every template is scoped to the
+         *     requester's fast-sandbox namespace.
+         */
+        post: operations["createTemplate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/templates/{templateId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Template identifier (`tpl_<uuid>`) */
+                templateId: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * Get a fsb template
+         * @description Returns one template with its build status. The status is lazily
+         *     synced from the fast-sandbox SandboxTemplate CRD, so the response
+         *     reflects the latest build phase.
+         */
+        get: operations["getTemplate"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a fsb template
+         * @description Deletes the catalog row and the backing SandboxTemplate CRD.
+         *     Sandboxes already created from the template are unaffected: their
+         *     Sandbox CRs hold their own artifact references.
+         */
+        delete: operations["deleteTemplate"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1124,11 +1252,14 @@ export interface components {
             timeoutSeconds?: number;
         };
         /**
-         * @description Extensible container for sandbox lifecycle hooks. All fields are optional.
-         *     Future lifecycle events are added as new optional fields without changing
-         *     the semantics of existing fields.
+         * @description Extensible container for sandbox lifecycle configuration. All fields
+         *     are optional. Future lifecycle events are added as new optional
+         *     fields without changing the semantics of existing fields.
          *
-         *     This release supports only `preStart` and `periodic`.
+         *     `preStart` and `periodic` are hooks executed inside the sandbox by
+         *     execd. `idlePolicy` is control-plane policy (OSEP-0024): it tells the
+         *     server how to treat the sandbox's state machine and never reaches the
+         *     guest.
          */
         SandboxLifecycle: {
             /**
@@ -1143,6 +1274,78 @@ export interface components {
              *     its previous run is still active.
              */
             periodic?: components["schemas"]["PeriodicLifecycleHook"][];
+            /**
+             * @description Auto-pause and wake-on-access behavior (OSEP-0024). Supported only
+             *     by the fast-sandbox backend; other backends reject the field.
+             *     Omitting `idlePolicy` preserves non-automated behavior exactly:
+             *     the sandbox is never auto-paused and never auto-woken.
+             */
+            idlePolicy?: components["schemas"]["IdlePolicy"];
+        };
+        /**
+         * @description Idle behavior declared by the sandbox (OSEP-0024). The policy is
+         *     desired state: the server validates it and persists it as the
+         *     reserved `sandbox.opensandbox.io/idle-policy` Sandbox CR annotation.
+         *
+         *     With `idleTimeoutSeconds`, the sandbox is auto-paused after that many
+         *     seconds without ingress-observed activity. Without it, the policy is
+         *     wake-only: the sandbox is never auto-paused, but a (manually) paused
+         *     sandbox wakes on access. A missing, malformed, or invalid policy is
+         *     treated exactly as absent — never as an implicit opt-in.
+         *
+         *     Constraints: `idleTimeoutSeconds` must not exceed the server's
+         *     configured activity TTL (default 1800), so a present-but-stale
+         *     activity key always implies idle-by-value. Enabling deployment flags
+         *     never changes the behavior of sandboxes that do not declare a policy.
+         */
+        IdlePolicy: {
+            /**
+             * @description Idle threshold X in seconds: the sandbox is auto-paused after X
+             *     continuously idle seconds. Absent together with `onIdle` means a
+             *     wake-only policy.
+             */
+            idleTimeoutSeconds?: number;
+            /**
+             * @description Action taken at the idle threshold. Required with, and only
+             *     valid with, `idleTimeoutSeconds`. Only `pause` exists today; the
+             *     enum exists so future actions are additive.
+             * @enum {string}
+             */
+            onIdle?: "pause";
+            /**
+             * @description Whether incoming traffic may wake the sandbox from `Paused`.
+             *     `false` keeps today's paused behavior (permanent 503 through the
+             *     gateway) and only `POST /sandboxes/{sandboxId}/resume` restores
+             *     the sandbox.
+             * @default true
+             */
+            wakeOnAccess?: boolean;
+            /**
+             * @description Application-declared activity probe. When the sandbox is
+             *     otherwise idle, the server issues `GET {path}` on `{port}`;
+             *     `200 {"active": true}` counts as activity and resets the idle
+             *     clock, while `{"active": false}`, any failure, or a timeout
+             *     records nothing. Relevant only with auto-pause.
+             */
+            activeProbe?: components["schemas"]["ActivityProbe"];
+        };
+        /**
+         * @description Endpoint inside the sandbox that answers `{"active": bool,
+         *     "message"?: string}` with 200 while work is in progress.
+         */
+        ActivityProbe: {
+            /** @description Sandbox port serving the probe endpoint. */
+            port: number;
+            /**
+             * @description Absolute HTTP path of the probe endpoint. Must not contain
+             *     whitespace or control characters.
+             */
+            path: string;
+            /**
+             * @description Probe request budget in seconds. The server defaults to 2 when omitted.
+             * @default 2
+             */
+            timeoutSeconds?: number;
         };
         /**
          * @description JSON Merge Patch (RFC 7396) request body for updating sandbox metadata.
@@ -1195,6 +1398,20 @@ export interface components {
              *     Mutually exclusive with `image`.
              */
             snapshotId?: string;
+            /**
+             * @description Fsb (fast-sandbox microVM) template to create the sandbox from; on the
+             *     `kubernetes` runtime this routes the create to the fsb catalog.
+             *     Mutually exclusive with `image` and `snapshotId`; in template mode
+             *     the workload shape is fixed by the template's golden image, so
+             *     `entrypoint`, `env`, `resourceLimits`, `resourceRequests`,
+             *     `volumes`, `platform`, `credentialProxy`, `secureAccess` and
+             *     lifecycle hooks are rejected (400), and `timeout` is required.
+             *     `lifecycle.idlePolicy` is allowed: it is control-plane state,
+             *     not workload shape.
+             *     The template must belong to the requester's tenant and be
+             *     `Succeeded`; anything else yields 404 (no existence leak).
+             */
+            templateId?: string;
             /**
              * @description Optional platform constraint for sandbox scheduling/runtime selection.
              *
@@ -1253,15 +1470,17 @@ export interface components {
                 [key: string]: string;
             };
             /**
-             * @description Optional declarative sandbox lifecycle hooks. This release supports
-             *     `preStart` and `periodic`. The server transports this configuration to
-             *     execd; callers must not depend on the internal transport mechanism.
-             *     The configuration is not included in Sandbox responses.
+             * @description Optional declarative sandbox lifecycle configuration. `preStart`
+             *     and `periodic` are hooks; the server transports them to execd and
+             *     callers must not depend on the internal transport mechanism. The
+             *     configuration is not included in Sandbox responses.
              *
-             *     Not supported together with `extensions.poolRef`, because Pool Pods
-             *     are pre-created before request-specific lifecycle hooks are known.
-             *     Runtimes that do not implement lifecycle hook transport reject this
-             *     field.
+             *     Lifecycle hooks are not supported together with
+             *     `extensions.poolRef`, because Pool Pods are pre-created before
+             *     request-specific hooks are known. Runtimes that do not implement
+             *     lifecycle hook transport reject hooks. `lifecycle.idlePolicy` is
+             *     not a hook and may accompany `extensions.poolRef`; it is honored
+             *     only by the fast-sandbox backend and rejected by others.
              */
             lifecycle?: components["schemas"]["SandboxLifecycle"];
             /**
@@ -1362,7 +1581,8 @@ export interface components {
             /**
              * Format: date-time
              * @description New absolute expiration time in UTC (RFC 3339 format).
-             *     Must be in the future and after the current expiresAt time.
+             *     Must be in the future. May be earlier than, equal to, or later than the current expiresAt.
+             *     The creation-time limit `server.max_sandbox_timeout_seconds` does not apply.
              *
              *     Example: "2025-11-16T14:30:45Z"
              */
@@ -1405,6 +1625,24 @@ export interface components {
             headers?: {
                 [key: string]: string;
             };
+        };
+        /**
+         * @description Policy intent for Fsb, or the sidecar policy for other backends.
+         *     Fsb does not report live enforcement state or enforcementMode.
+         */
+        PolicyStatusResponse: {
+            /** @example ok */
+            status?: string;
+            /**
+             * @description Mode derived from the returned policy.
+             * @example deny_all
+             */
+            mode?: string;
+            /** @description Optional sidecar enforcement backend; omitted for Fsb. */
+            enforcementMode?: string;
+            /** @description Optional context returned by the sidecar. */
+            reason?: string;
+            policy?: components["schemas"]["NetworkPolicy"];
         };
         /**
          * @description Egress network policy matching the sidecar `/policy` request body.
@@ -1579,6 +1817,130 @@ export interface components {
             /** @description OSS access key secret for inline credentials mode. */
             accessKeySecret: string;
         };
+        /** @description Build-side readiness gate for a fsb template. */
+        FsbTemplateReadiness: {
+            /**
+             * @description Readiness probe checked first during the golden-image build;
+             *     e.g. `tcp://127.0.0.1:44772` or `cmd://<command>`.
+             */
+            probe?: string;
+            /** @description Fallback warmup window in seconds (default 60). */
+            warmupSeconds?: number;
+        };
+        /**
+         * @description Request to create a Fast Sandbox template: a fast-sandbox golden-image build
+         *     The server persists the build intent, projects it onto a
+         *     SandboxTemplate CRD, and reports the asynchronous build through the
+         *     template status. Kernel, execd and guest init are server-side build
+         *     inputs supplied from the `[fsb]` configuration, not client fields.
+         */
+        CreateFsbTemplateRequest: {
+            /** @description Source OCI image reference the golden image is built from. */
+            image: string;
+            /**
+             * @description Guest machine sizing: `cpu` -> guest vCPUs, `memory` -> guest memory,
+             *     `disk` -> logical size of the guest rootfs (parallel resource keys).
+             *     The artifact set is stored and P2P-pulled at the `disk` size, so keep
+             *     it just above the expanded source image. Defaults when omitted:
+             *     cpu `1`, memory `512Mi`, disk `2Gi`.
+             */
+            resourceLimits?: components["schemas"]["ResourceLimits"];
+            /**
+             * @description Guest business command (argv); empty defaults to
+             *     `["tail", "-f", "/dev/null"]`.
+             */
+            entrypoint?: string[];
+            /**
+             * @description Environment variables baked into the golden image (injected as
+             *     `/etc/sandbox-init.env` in the guest; literal values only). The
+             *     source image's own OCI `Config.Env` is inherited like a container
+             *     runtime would; an env with the same name here overrides the
+             *     inherited value. Names must be valid shell variable names
+             *     (`[A-Za-z_][A-Za-z0-9_]*`).
+             * @example {
+             *       "LOG_LEVEL": "info"
+             *     }
+             */
+            env?: {
+                [key: string]: string;
+            };
+            /** @description Custom key-value metadata for management, filtering, and tagging. */
+            metadata?: {
+                [key: string]: string;
+            };
+            readiness?: components["schemas"]["FsbTemplateReadiness"];
+            /**
+             * @description S3-compatible publish target for the built artifacts,
+             *     e.g. `s3://bucket/publish`.
+             */
+            publish: string;
+            /**
+             * @description Storage encoding of the produced snapshot set.
+             * @default overlaybd
+             * @enum {string}
+             */
+            format: "native" | "overlaybd";
+        };
+        /** @description Status of a fsb template build. */
+        FsbTemplateStatus: {
+            /**
+             * @description Build lifecycle phase.
+             * @enum {string}
+             */
+            phase: "Pending" | "Building" | "Succeeded" | "Failed";
+            /**
+             * @description S3 manifest reference of the published artifacts; present when
+             *     Succeeded.
+             */
+            manifestRef?: string;
+            /** @description Failure reason when phase is Failed. */
+            message?: string;
+        };
+        /**
+         * @description A fsb template: a golden image whose build is declared and executed
+         *     by fast-sandbox.
+         */
+        FsbTemplate: {
+            /** @description Server-generated template ID (`tpl_<uuid>`). */
+            templateId: string;
+            /** @description Source OCI image reference. */
+            image: string;
+            resourceLimits?: components["schemas"]["ResourceLimits"];
+            /** @description Guest business command (argv). */
+            entrypoint?: string[];
+            /** @description Environment variables baked into the golden image. */
+            env?: {
+                [key: string]: string;
+            };
+            /** @description Custom metadata from the creation request. */
+            metadata?: {
+                [key: string]: string;
+            };
+            readiness?: components["schemas"]["FsbTemplateReadiness"];
+            /** @description S3-compatible publish target. */
+            publish: string;
+            /**
+             * @description Snapshot storage encoding.
+             * @enum {string}
+             */
+            format: "native" | "overlaybd";
+            status: components["schemas"]["FsbTemplateStatus"];
+            /**
+             * Format: date-time
+             * @description Creation timestamp (RFC 3339 UTC).
+             */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @description Last update timestamp (RFC 3339 UTC).
+             */
+            updatedAt: string;
+        };
+        /** @description Paginated collection of fsb templates. */
+        ListFsbTemplatesResponse: {
+            items: components["schemas"]["FsbTemplate"][];
+            pagination: components["schemas"]["PaginationInfo"];
+        };
     };
     responses: {
         /** @description Error response envelope */
@@ -1659,6 +2021,14 @@ export interface components {
     };
     requestBodies: never;
     headers: {
+        /**
+         * @description Origin of the sandbox: `template` when the sandbox runs on a fsb
+         *     golden-image template (no sandbox-side egress sidecar; egress policy
+         *     is managed through the lifecycle control plane). The set of values
+         *     may grow over time; clients must treat a missing or unknown value as
+         *     "not template-backed" and keep using the egress sidecar.
+         */
+        SandboxOrigin: string;
         /** @description Unique request identifier for tracing */
         XRequestId: string;
         /** @description URI of the newly created or related resource */
@@ -1670,6 +2040,172 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    getSandboxNetworkPolicy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unique sandbox identifier */
+                sandboxId: components["parameters"]["SandboxId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Policy intent (Fsb) or sidecar policy (other backends). */
+            200: {
+                headers: {
+                    "X-Request-ID": components["headers"]["XRequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyStatusResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalServerError"];
+            /** @description Policy state is temporarily unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    replaceSandboxNetworkPolicy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unique sandbox identifier */
+                sandboxId: components["parameters"]["SandboxId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NetworkPolicy"];
+            };
+        };
+        responses: {
+            /** @description Committed policy intent; Fsb omits enforcementMode. */
+            200: {
+                headers: {
+                    "X-Request-ID": components["headers"]["XRequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyStatusResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalServerError"];
+            /** @description FastPath or policy state is temporarily unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    deleteSandboxNetworkPolicyRules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unique sandbox identifier */
+                sandboxId: components["parameters"]["SandboxId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": string[];
+            };
+        };
+        responses: {
+            /** @description Committed policy intent; Fsb omits enforcementMode. */
+            200: {
+                headers: {
+                    "X-Request-ID": components["headers"]["XRequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyStatusResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalServerError"];
+            /** @description FastPath or policy state is temporarily unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    patchSandboxNetworkPolicy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unique sandbox identifier */
+                sandboxId: components["parameters"]["SandboxId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NetworkRule"][];
+            };
+        };
+        responses: {
+            /** @description Committed policy intent; Fsb omits enforcementMode. */
+            200: {
+                headers: {
+                    "X-Request-ID": components["headers"]["XRequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyStatusResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalServerError"];
+            /** @description FastPath or policy state is temporarily unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     reportMetricsEvent: {
         parameters: {
             query?: never;
@@ -1703,6 +2239,120 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             500: components["responses"]["InternalServerError"];
+        };
+    };
+    listTemplates: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Arbitrary metadata key-value pairs for filtering, keys and values
+                 *     must be url encoded. Example: `?metadata=project%3DApollo%26env%3Dprod`
+                 */
+                metadata?: string;
+                /** @description Page number for pagination */
+                page?: number;
+                /** @description Number of items per page */
+                pageSize?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Paginated collection of templates */
+            200: {
+                headers: {
+                    "X-Request-ID": components["headers"]["XRequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListFsbTemplatesResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            501: components["responses"]["InternalServerError"];
+        };
+    };
+    createTemplate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateFsbTemplateRequest"];
+            };
+        };
+        responses: {
+            /** @description Template build accepted; the phase starts at Pending */
+            201: {
+                headers: {
+                    "X-Request-ID": components["headers"]["XRequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FsbTemplate"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            409: components["responses"]["Conflict"];
+            501: components["responses"]["InternalServerError"];
+            503: components["responses"]["InternalServerError"];
+        };
+    };
+    getTemplate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Template identifier (`tpl_<uuid>`) */
+                templateId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Template status and artifact references */
+            200: {
+                headers: {
+                    "X-Request-ID": components["headers"]["XRequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FsbTemplate"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            501: components["responses"]["InternalServerError"];
+        };
+    };
+    deleteTemplate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Template identifier (`tpl_<uuid>`) */
+                templateId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Template deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            501: components["responses"]["InternalServerError"];
         };
     };
 }

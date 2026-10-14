@@ -1,4 +1,4 @@
-# Copyright 2026 Alibaba Group Holding Ltd.
+# Copyright 2026 The OpenSandbox Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -36,6 +36,7 @@ from opensandbox_server.services.diagnostics import (
     limit_diagnostic_lines,
     unsupported_scope_error,
 )
+from opensandbox_server.services.k8s.workload_mapper import allocated_pod_names
 
 _SUPPORTED_LOG_SCOPES = ("container", "all")
 _SUPPORTED_EVENT_SCOPES = ("runtime", "all")
@@ -130,13 +131,32 @@ class K8sDiagnosticsMixin:
         )
 
     def _find_pod_for_sandbox(self, sandbox_id: str):
-        """Find the Pod associated with a sandbox ID via label selector."""
+        namespace = self._resolve_namespace()
+        workload = None
+        workload_provider = getattr(self, "workload_provider", None)
+        if workload_provider is not None:
+            from opensandbox_server.services.k8s.workload_access import (
+                _get_owned_workload_or_404,
+            )
+
+            workload = _get_owned_workload_or_404(
+                workload_provider,
+                namespace,
+                sandbox_id,
+            )
         label_selector = f"{SANDBOX_ID_LABEL}={sandbox_id}"
         try:
             pods = self.k8s_client.list_pods(
-                namespace=self._resolve_namespace(),
+                namespace=namespace,
                 label_selector=label_selector,
             )
+            if not pods:
+                # Pool-allocated pods don't carry the sandbox ID label.
+                pods = [
+                    pod
+                    for name in allocated_pod_names(workload)
+                    if (pod := self.k8s_client.read_pod(namespace, name)) is not None
+                ]
         except Exception as exc:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -243,7 +263,6 @@ class K8sDiagnosticsMixin:
         if spec.runtime_class_name:
             lines.append(f"Runtime Class:  {spec.runtime_class_name}")
 
-        # Container statuses
         if pod_status and pod_status.container_statuses:
             lines.append("")
             lines.append("Containers:")
@@ -268,7 +287,6 @@ class K8sDiagnosticsMixin:
                     t = cs.last_state.terminated
                     lines.append(f"    Last State:     Terminated (exit={t.exit_code}, reason={t.reason})")
 
-        # Init container statuses
         if pod_status and pod_status.init_container_statuses:
             lines.append("")
             lines.append("Init Containers:")
@@ -282,7 +300,6 @@ class K8sDiagnosticsMixin:
                     elif cs.state.waiting:
                         lines.append(f"    State:          Waiting ({cs.state.waiting.reason})")
 
-        # Conditions
         if pod_status and pod_status.conditions:
             lines.append("")
             lines.append("Conditions:")
@@ -291,14 +308,12 @@ class K8sDiagnosticsMixin:
                 if cond.message:
                     lines.append(f"    Message: {cond.message}")
 
-        # Labels
         if meta.labels:
             lines.append("")
             lines.append("Labels:")
             for k, v in sorted(meta.labels.items()):
                 lines.append(f"  {k}={v}")
 
-        # Resource requests/limits
         if spec.containers:
             lines.append("")
             lines.append("Resources:")
