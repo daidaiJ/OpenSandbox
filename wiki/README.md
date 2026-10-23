@@ -39,6 +39,7 @@
 | [池模式启用隔离会话：配置配方、场景边界、得失比对与生产评估](opensandbox-isolated-sessions-pool-mode-enable-and-assessment.md) | ubuntu k3s 实测：池模板启用 bwrap 隔离四前置（bwrap/session-gate/SYS_ADMIN+NET_ADMIN/upper）、与 /command 及 native /session 三通道比对、得失表；**结论：有条件可生产**（binds 损坏、超时杀会话、配额仅分配时等规避集 + 独立池 checklist） | 2026-09-08 |
 | [KEDA 部署验证报告：Redis 队列驱动 Server 扩缩容（k3s 实测）](opensandbox-keda-redis-autoscale-validation.md) | ubuntu k3s 实测闭环（40 条队列→server 1↔3 副本）：版本红线（K8s 1.18↔1.26+）、精准镜像 digest、CRD/APIService 清单、**权限分层**（管理员一次性装 vs 业务开发自助）、测试→生产（2.10.1→2.8.2）差异对照与迁移七步 | 2026-09-13 |
 | [KEDA 服务接入 SOP：任意 Deployment 事件化弹性扩缩](opensandbox-keda-integration-sop.md) | 业务开发自助五步法：可水平扩判定（含 ScaledJob 分支）、信号源选型、ScaledObject/TriggerAuthentication 完整模板与 `副本=ceil(积压/listLength)` 换算、双向验证验收表、运维操作与 7 条坑清单 | 2026-09-13 |
+| [Perplexity SPACE 沙箱架构拆解与 OpenSandbox 可吸收项](opensandbox-vs-perplexity-space-architecture.md) | SPACE 三层架构、pause/suspend 与快照分层、温池 release/slot 状态机、凭据与数据面边界；对照本仓池化/容器/Fast Sandbox 路径，给出 P0–P2 吸收优先级与不吸收项 | 2026-10-23 |
 
 ## 方案设计
 
