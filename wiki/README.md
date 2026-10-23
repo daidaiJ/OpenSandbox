@@ -40,6 +40,7 @@
 | [KEDA 部署验证报告：Redis 队列驱动 Server 扩缩容（k3s 实测）](opensandbox-keda-redis-autoscale-validation.md) | ubuntu k3s 实测闭环（40 条队列→server 1↔3 副本）：版本红线（K8s 1.18↔1.26+）、精准镜像 digest、CRD/APIService 清单、**权限分层**（管理员一次性装 vs 业务开发自助）、测试→生产（2.10.1→2.8.2）差异对照与迁移七步 | 2026-09-13 |
 | [KEDA 服务接入 SOP：任意 Deployment 事件化弹性扩缩](opensandbox-keda-integration-sop.md) | 业务开发自助五步法：可水平扩判定（含 ScaledJob 分支）、信号源选型、ScaledObject/TriggerAuthentication 完整模板与 `副本=ceil(积压/listLength)` 换算、双向验证验收表、运维操作与 7 条坑清单 | 2026-09-13 |
 | [Perplexity SPACE 沙箱架构拆解与 OpenSandbox 可吸收项](opensandbox-vs-perplexity-space-architecture.md) | SPACE 三层架构、pause/suspend 与快照分层、温池 release/slot 状态机、凭据与数据面边界；对照本仓池化/容器/Fast Sandbox 路径，给出 P0–P2 吸收优先级与不吸收项 | 2026-10-23 |
+| [LiteBoxd 文件持久化与恢复机制拆解](liteboxd-persistence-and-recovery-analysis.md) | 每沙箱 PVC + rootfs overlay（upper/work 落盘）+ Deployment 自愈 + DB/K8s reconcile；启动挂载时序、恢复矩阵、删除状态机、镜像漂移/特权 sidecar/无备份等边界，以及与池化 + S3 方案的对照 | 2026-10-23 |
 
 ## 方案设计
 
