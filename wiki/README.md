@@ -43,6 +43,7 @@
 | [LiteBoxd 文件持久化与恢复机制拆解](liteboxd-persistence-and-recovery-analysis.md) | 每沙箱 PVC + rootfs overlay（upper/work 落盘）+ Deployment 自愈 + DB/K8s reconcile；启动挂载时序、恢复矩阵、删除状态机、镜像漂移/特权 sidecar/无备份等边界，以及与池化 + S3 方案的对照 | 2026-10-23 |
 | [BoxLite 及同类平台状态快照设计参考与 OpenSandbox 吸收清单](opensandbox-boxlite-state-snapshot-design-references.md) | BoxLite QCOW2/外部 COW 快照实现与 issue #205 设计差异；E2B/Modal/Daytona/agent-sandbox 的 fs/memory/TTL/archive 取舍；给出 quiesce 契约、统一 manifest、本地 COW 快照、retention/GC、export/import 的 P0–P2 落点与不吸收项 | 2026-10-23 |
 | [沙箱状态跨节点持久化与恢复：OpenKruise Agents 实践、OpenSandbox 现状与同类方案](opensandbox-cross-node-state-persistence-and-recovery.md) | 状态分层与跨节点三条件；OpenKruise pause/Checkpoint/Commit 与 ACS 休眠策略；OpenSandbox 容器 OCI/QEMU/fsb/池化 + S3；CubeSandbox xfs→S3、CRIU、gVisor、Firecracker、E2B/Modal/Daytona、agent-sandbox/LiteBoxd 对照；选型决策树、不变量、成本与落点 | 2026-10-26 |
+| [DHI 加固建议对照与剩余加固面（含 seccomp 场景影响）](opensandbox-dhi-hardening-gap-and-seccomp-impact.md) | DHI 两篇（use / OpenShift SCC）14 条主张逐条对照本仓现状（execd init hardening 默认关闭、镜像 root、无只读根、SBOM/签名准入空白、securityContext 仅透传 4 字段）；P0–P2 加固清单；seccomp/Landlock/cap drop 三层对常规 agent 场景的边界矩阵、`EACCES` 错误形态、mount 新 API 与 `clone` flag 覆盖缺口、按池缓解配方 | 2026-10-27 |
 
 ## 方案设计
 
