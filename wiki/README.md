@@ -44,6 +44,7 @@
 | [BoxLite 及同类平台状态快照设计参考与 OpenSandbox 吸收清单](opensandbox-boxlite-state-snapshot-design-references.md) | BoxLite QCOW2/外部 COW 快照实现与 issue #205 设计差异；E2B/Modal/Daytona/agent-sandbox 的 fs/memory/TTL/archive 取舍；给出 quiesce 契约、统一 manifest、本地 COW 快照、retention/GC、export/import 的 P0–P2 落点与不吸收项 | 2026-10-23 |
 | [沙箱状态跨节点持久化与恢复：OpenKruise Agents 实践、OpenSandbox 现状与同类方案](opensandbox-cross-node-state-persistence-and-recovery.md) | 状态分层与跨节点三条件；OpenKruise pause/Checkpoint/Commit 与 ACS 休眠策略；OpenSandbox 容器 OCI/QEMU/fsb/池化 + S3；CubeSandbox xfs→S3、CRIU、gVisor、Firecracker、E2B/Modal/Daytona、agent-sandbox/LiteBoxd 对照；选型决策树、不变量、成本与落点 | 2026-10-26 |
 | [DHI 加固建议对照与剩余加固面（含 seccomp 场景影响）](opensandbox-dhi-hardening-gap-and-seccomp-impact.md) | DHI 两篇（use / OpenShift SCC）14 条主张逐条对照本仓现状（execd init hardening 默认关闭、镜像 root、无只读根、SBOM/签名准入空白、securityContext 仅透传 4 字段）；P0–P2 加固清单；seccomp/Landlock/cap drop 三层对常规 agent 场景的边界矩阵、`EACCES` 错误形态、mount 新 API 与 `clone` flag 覆盖缺口、按池缓解配方 | 2026-10-27 |
+| [Open Managed Agents 凭证隔离拆解 + Google Agent Compute Engine / Filestore agent volumes 对照](open-managed-agents-credential-isolation-and-google-agent-storage.md) | 源码核对 OMA（commit `e9a0743`）：**无沙箱**、vault 凭据 AES-256-GCM 只写不读、唯一解密路径是 MCP token 服务端代理、`vault_ids`/`allowed_hosts` 只存不执行、持久化仅事件日志回放；ACE＝Agent Compute Engine（每 agent 硬件隔离 microVM + 每 microVM 一块 Hyperdisk，guest 内零凭据）；**Hyperdisk 是默认加密的块存储，不是文件存储**；**ACE 跨节点重建无公开文档**（文档描述的"快"是同一 host 的 idle→active），可比机制只在 GKE Pod snapshots（gVisor，明确不支持 microVM）与 Agent Substrate（snapshot→GCS + warm Worker，sub-500ms）；P0–P2 吸收项与不吸收项 | 2026-10-30 |
 
 ## 方案设计
 
@@ -108,4 +109,9 @@ isolated-sessions-pool-mode-enable-and-assessment ──┬── isolated-sessi
 liteboxd-persistence-and-recovery-analysis ── opensandbox-boxlite-state-snapshot-design-references（状态持久化外部参考）
 opensandbox-vs-perplexity-space-architecture ── opensandbox-boxlite-state-snapshot-design-references（两级暂停/快照分层互补）
 opensandbox-boxlite-state-snapshot-design-references ── opensandbox-cross-node-state-persistence-and-recovery（跨节点恢复综合）
+open-managed-agents-credential-isolation-and-google-agent-storage ──┬── egress-netpol-vault-sop（沙箱零凭据 + 控制面代理注入的对照）
+                                                                   ├── pooled-session-s3-sync-middleware（对话态/配置态/文件态三档持久化）
+                                                                   ├── pool-mode-volumes-and-storage-practice（租户级卷隔离与 HOT/WARM/COLD 分层）
+                                                                   ├── vm-microvm-remote-storage-mount-forms（共享块设备的多写语义）
+                                                                   └── opensandbox-vs-perplexity-space-architecture（凭据与数据面边界互补）
 ```
