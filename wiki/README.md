@@ -46,6 +46,7 @@
 | [DHI 加固建议对照与剩余加固面（含 seccomp 场景影响）](opensandbox-dhi-hardening-gap-and-seccomp-impact.md) | DHI 两篇（use / OpenShift SCC）14 条主张逐条对照本仓现状（execd init hardening 默认关闭、镜像 root、无只读根、SBOM/签名准入空白、securityContext 仅透传 4 字段）；P0–P2 加固清单；seccomp/Landlock/cap drop 三层对常规 agent 场景的边界矩阵、`EACCES` 错误形态、mount 新 API 与 `clone` flag 覆盖缺口、按池缓解配方 | 2026-10-27 |
 | [Open Managed Agents 凭证隔离拆解 + Google Agent Compute Engine / Filestore agent volumes 对照](open-managed-agents-credential-isolation-and-google-agent-storage.md) | 源码核对 OMA（commit `e9a0743`）：**无沙箱**、vault 凭据 AES-256-GCM 只写不读、唯一解密路径是 MCP token 服务端代理、`vault_ids`/`allowed_hosts` 只存不执行、持久化仅事件日志回放；ACE＝Agent Compute Engine（每 agent 硬件隔离 microVM + 每 microVM 一块 Hyperdisk，guest 内零凭据）；**Hyperdisk 是默认加密的块存储，不是文件存储**；**ACE 跨节点重建无公开文档**（文档描述的"快"是同一 host 的 idle→active），可比机制只在 GKE Pod snapshots（gVisor，明确不支持 microVM）与 Agent Substrate（snapshot→GCS + warm Worker，sub-500ms）；P0–P2 吸收项与不吸收项 | 2026-10-30 |
 | [Dragonfly 用于沙箱 S3 工件缓存加速的适用性评估](opensandbox-dragonfly-s3-cache-acceleration-assessment.md) | 三链路分开判定：镜像拉取 ✅（轻量部署 scheduler+client，无 manager/MySQL/Redis）、共享只读数据 ✅（内容不可变、多节点重复读）、per-user 会话工件 ❌（无跨 peer 复用 + 冷路径净负 + 缓存身份过滤签名参数 → 陈旧读与跨租户暴露）；源码级依据「仅 GET 走 P2P，PUT 直通源站」、官方容量账（peer 4C/8G/500Gi）、替代方案对照与 4 步验证清单 | 2026-11-02 |
+| [非池沙箱的节点本地卷暂停/恢复：hostPath 形态、S3 归档与跨节点 P2P 传递](opensandbox-nonpool-node-local-volume-pause-resume.md) | 现有 pause 只 commit 容器可写层、卷不在内的证据链（含 QEMU 拒绝卷内 qcow2）；hostPath/Local PV 两条落地路径与三个缺口（无 per-sandbox 节点亲和、无 Local PV、`DirectoryOrCreate`）；**CubeSandbox（节点本地权威+钉源节点）vs Fast Sandbox（节点本地缓存+S3 权威）两种可吸收形态**及取舍理由；P2P 传活目录的三个前置条件（不可变/可寻址/跨节点复用）+ 12 类传输工具对照；需自建的"逻辑卷 + 节点本地副本"两对象；挂点 `SandboxSnapshot.status.format` / OSEP-0015 `SandboxSnapshotClass.type=Local`；P0~P2 路线与验收 | 2026-11-07 |
 
 ## 方案设计
 
@@ -119,4 +120,8 @@ dragonfly-s3-cache-acceleration-assessment ──┬── pooled-session-s3-syn
                                              ├── shared-storage-interpreter-minimal-image（② 共享数据读取的镜像侧加速）
                                              ├── pool-mode-volumes-and-storage-practice（节点盘预算：hostPath/emptyDir 之外再加缓存盘）
                                              └── k8s-networkpolicy-vs-egress-sidecar（P2P 跨节点通路与 namespace 隔离的冲突）
+nonpool-node-local-volume-pause-resume ──┬── cross-node-state-persistence-and-recovery（状态分层与同类方案总览）
+                                         ├── boxlite-state-snapshot-design-references（快照机制与吸收清单）
+                                         ├── dragonfly-s3-cache-acceleration-assessment（P2P 对 per-user 内容不回本的判定）
+                                         └── pooled-session-s3-sync-middleware（S3 权威副本与静态恢复/回写的既有形态）
 ```
