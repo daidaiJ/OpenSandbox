@@ -8,4 +8,4 @@
 
 | 文档 | 主题 | 日期 |
 |---|---|---|
-| [cloudflare-rivet-sandbox-and-s3-survey.md](cloudflare-rivet-sandbox-and-s3-survey.md) | Cloudflare / Rivet 近期沙箱项目；Sandbox SDK 1.0、Computer、CI、ArtifactFS、Kitesurf；S3Mount / DirectoryBackup / 快照 / 懒加载；celld vs OpenOrange 的 S3 请求成本 benchmark 与可借鉴点 | 2026-11-14 |
+| [cloudflare-rivet-sandbox-and-s3-survey.md](cloudflare-rivet-sandbox-and-s3-survey.md) | Cloudflare / Rivet 近期沙箱项目；Sandbox SDK 1.0、Computer、CI、ArtifactFS、Kitesurf；S3Mount / DirectoryBackup / 快照 / 懒加载；celld vs OpenOrange 的 S3 请求成本 benchmark；市面沙箱密度做法与厂商对照；S3Mount 的 FUSE 权限、CSI/PVC、E2B VM 快照与 PVC 的区别、池化模板限制、无 PVC 供应商时的 S3 同步/FUSE sidecar 备选、多轮/多会话的池化约束，以及对 OpenSandbox 的落地建议 | 2026-11-14 |
