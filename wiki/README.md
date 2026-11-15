@@ -49,6 +49,7 @@
 | [非池沙箱的节点本地卷暂停/恢复：hostPath 形态、S3 归档与跨节点 P2P 传递](opensandbox-nonpool-node-local-volume-pause-resume.md) | 现有 pause 只 commit 容器可写层、卷不在内的证据链（含 QEMU 拒绝卷内 qcow2）；hostPath/Local PV 两条落地路径与三个缺口（无 per-sandbox 节点亲和、无 Local PV、`DirectoryOrCreate`）；**CubeSandbox（节点本地权威+钉源节点）vs Fast Sandbox（节点本地缓存+S3 权威）两种可吸收形态**及取舍理由；P2P 传活目录的三个前置条件（不可变/可寻址/跨节点复用）+ 12 类传输工具对照；需自建的"逻辑卷 + 节点本地副本"两对象；挂点 `SandboxSnapshot.status.format` / OSEP-0015 `SandboxSnapshotClass.type=Local`；P0~P2 路线与验收 | 2026-11-07 |
 | [微虚机、Docker 与 gVisor 沙箱实测：性能、密度与分时复用](opensandbox-microvm-kernel-and-sandbox-metrics-comparison.md) | WSL2 嵌套 KVM 实测 Firecracker / Cloud Hypervisor / QEMU microvm / smolvm / BoxLite 与 Docker / gVisor 的启动、PSS/cgroup、CPU、快照与恢复；给出相同资源下的理论密度上限、保留文件状态的闲置暂停/分时复用适配度、agent 沙箱 volume/PVC 形态，以及 OpenSandbox Fast Sandbox 的落点 | 2026-11-15 |
 | [沙箱运行时选型：核心实测结论](opensandbox-sandbox-runtime-selection-core-findings.md) | 从实测提炼：裸 runc 热启动 48 ms / 空闲约 1 MiB、gVisor 原生 77 ms、Firecracker 1.10 s；启动/内存/密度分层结论（“高密度选 FC”仅在必须硬件隔离时成立）；微虚机经 Kata 进 K8s 的链路成本；runc/gVisor + volume/PVC 选型表；未测 K8s/Kata/PVC CSI 的边界 | 2026-11-15 |
+| [沙箱运行时选型：极简版](opensandbox-sandbox-runtime-selection-minimal.md) | 按 STE-zh 简明技术中文编写：五条结论、六行核心数据、五条选型、四条边界；适合快速决策和评审传阅 | 2026-11-15 |
 
 ## 方案设计
 
