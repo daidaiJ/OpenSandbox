@@ -1,33 +1,44 @@
 ---
 name: opensandbox-microvm-kernel-and-sandbox-metrics-comparison
-description: 在 WSL2 嵌套 KVM 上实测 Firecracker、Cloud Hypervisor、QEMU microvm、smolvm、BoxLite、Docker 与 gVisor 的隔离模型、启动、内存、CPU、快照与恢复，并给出相同资源下的理论密度上限与闲置暂停分时复用适配度；对照 crosvm、Kata、microsandbox 的机制与边界
+description: 在 WSL2 嵌套 KVM 上实测 Firecracker、Cloud Hypervisor、QEMU microvm、smolvm、BoxLite、Docker、gVisor 与裸 runc 的隔离模型、启动、内存、CPU、快照与恢复，并给出相同资源下的理论密度上限与闲置暂停分时复用适配度；对照 crosvm、Kata、microsandbox 的机制与边界
 type: project
 ---
 
-# 微虚机、Docker 与 gVisor 沙箱实测：性能、密度与分时复用
+# 微虚机、Docker、gVisor 与裸 runc 沙箱实测：性能、密度与分时复用
 
 > 调研日期：2026-11-15
 > 测试环境：Windows + WSL2 Ubuntu 22.04.5，WSL 内核 `6.18.40.1-microsoft-standard-WSL2`，AMD Ryzen 5 4600H（WSL 可见 6 vCPU / 11 GiB），`/dev/kvm` 可用（AMD-V 嵌套虚拟化），以 root 运行。
-> 测试对象：Firecracker 1.18.0、Cloud Hypervisor 54.1、QEMU 6.2 `microvm`、smolvm 1.35.0、BoxLite 0.13.1；容器基线 Docker 27.3.1（runc）与 gVisor release-20261109.0（KVM/ptrace）；另对照 crosvm、Kata Containers 4.3.1、microsandbox 的公开机制。
-> 口径：性能数字全部在本机实测；WSL2 嵌套虚拟化的绝对值和裸金属不可直接比较，**只看相对差异和量级**。guest 统一为 Alpine 3.22.8，rootfs 256 MiB ext4；除特别说明外统一 **1 vCPU / 512 MiB**、5 轮取中位数，Firecracker/Cloud Hypervisor/QEMU 在 1 轮预热后测热缓存启动。smolvm/BoxLite 的端到端时间包含 CLI、镜像准备和 agent 握手；Docker/gVisor 的 `docker run` 包含 Docker CLI/daemon；它们和“到 guest `/init`”不是同一边界，文中分开标注。
+> 测试对象：Firecracker 1.18.0、Cloud Hypervisor 54.1、QEMU 6.2 `microvm`、smolvm 1.35.0、BoxLite 0.13.1；容器基线裸 runc 1.2.2、Docker 27.3.1（runc）与 gVisor release-20261109.0（KVM/ptrace）；另对照 crosvm、Kata Containers 4.3.1、microsandbox 的公开机制。
+> 口径：性能数字全部在本机实测；WSL2 嵌套虚拟化的绝对值和裸金属不可直接比较，**只看相对差异和量级**。guest 统一为 Alpine 3.22.8，rootfs 256 MiB ext4；除特别说明外统一 **1 vCPU / 512 MiB**、5 轮取中位数，Firecracker/Cloud Hypervisor/QEMU 在 1 轮预热后测热缓存启动。smolvm/BoxLite 的端到端时间包含 CLI、镜像准备和 agent 握手；Docker/gVisor 的 `docker run` 包含 Docker CLI/daemon；裸 runc 用独立 OCI bundle，不含 shim/pause/CNI/K8s；它们和“到 guest `/init`”不是同一边界，文中分开标注。
 
 ## 一、结论先行
 
-| 维度 | 实测结论 |
-|---|---|
-| 启动到 guest init / 容器命令完成 | 热缓存中位数：QEMU microvm **0.95 s**、Cloud Hypervisor **1.07 s**、Firecracker **1.10 s**（同内核 6.18.62，1 vCPU）；Docker `docker run` **2.46 s**、gVisor KVM `docker run` **2.67 s**（含 Docker CLI/daemon）；gVisor 原生 `runsc run` 仅 **0.077 s** |
-| 端到端 sandbox 启动 | smolvm **1.47 s**（冷启动 4.35 s，本地 rootfs 导入）；BoxLite CLI **3.94 s**（冷启动 8.58 s），其中镜像准备 2.74 s、VMM spawn 仅 0.089 s |
-| 空闲宿主内存 | Docker **15.0 MiB**（含 shim 14.1）、gVisor KVM **57.0 MiB**（含 shim/gofer/sentry）、Firecracker **59.5 MiB**、Cloud Hypervisor **73.7 MiB**、QEMU **122.0 MiB**、smolvm **118.5 MiB**、BoxLite **135.8 MiB**（512 MiB guest 仅触碰启动页，PSS 口径；容器另给 cgroup） |
-| guest/容器触碰 300 MiB 后 | Docker **306.7 MiB**（cgroup 301.8）、gVisor KVM **326.7 MiB**（cgroup 312.8）、Firecracker **357 MiB**、Cloud Hypervisor **372 MiB**、QEMU **420 MiB**、smolvm **428 MiB**、BoxLite **303 MiB**（分配方式不同，见 §5） |
-| 空闲 CPU | 全部 **0.0%**（5 秒采样）；启动 CPU：QEMU ~0.91 s、Firecracker ~1.01 s、Cloud Hypervisor ~1.06 s；容器启动 CPU 被 Docker daemon 摊薄，未单独拆分 |
-| 快照创建 | gVisor 300 MiB checkpoint **0.39 s / 301 MiB**；Cloud Hypervisor **0.70 s / 513 MiB**；Docker commit **1.05 s / 8.3 MB**（磁盘镜像，不含 RAM）；Firecracker full **2.22 s / 513 MiB**；smolvm/BoxLite 受镜像/运行时限制未测到 |
-| 快照恢复 | Firecracker **0.019 s**；gVisor eager **0.15 s**、async **0.10 s**；Cloud Hypervisor 默认 eager **0.367 s**，`ondemand` **0.015 s**、`copyonwrite` **0.013 s**（后两者把缺页成本推迟到首次访问）；Docker commit 恢复等同新容器启动，Docker checkpoint 在本次环境不可用 |
-| 隔离模型 | Docker 共享宿主内核（namespace/cgroup/seccomp）；gVisor 用户态 Sentry 应用内核（无 guest 内核，KVM/ptrace 平台）；Firecracker/Cloud Hypervisor/QEMU/libkrun 系是硬件虚拟化 microVM，各自带 guest 内核 |
-| guest 内核 | Firecracker 6.18.62（完整 CI config、`/proc/config.gz` 可用）；smolvm 6.18.60（libkrunfw 5.5.0，无 IKCONFIG）；BoxLite 默认 6.12.87（原生 VMM RC 为 6.12.110）；Kata 4.3.1 固定 6.18.56；Cloud Hypervisor/QEMU/crosvm 自带内核（BYO）；Docker 用宿主 6.18.40.1-WSL2；gVisor 无 guest 内核，`uname` 报 4.19.0-gvisor |
-| 理论密度上限 | 64 vCPU/64 GiB、4:1 超卖、1 vCPU/512 MiB 时：Docker **213**、gVisor **200**、Firecracker **183**、Cloud Hypervisor **176**、QEMU **155**、smolvm **153**、BoxLite **150**；1:1 的 64 vCPU 节点上所有方案都是 64，CPU 先撞顶 |
-| 分时复用（停计算、留文件） | Docker/FC/CLH/QEMU/gVisor 适配度高，恢复 0.95–1.74 s（gVisor 原生 0.077 s）；smolvm 1.47 s 中等，BoxLite 3.94 s 偏低；保留 rootfs/可写层即可，不需要每次 commit 或 RAM 快照 |
-| Agent 沙箱 + volume/PVC | 只保留文件状态、进程可重启时，runc/gVisor + volume/PVC 通常比 FC 更合适；FC/Kata 只在必须硬件隔离时选，且 PVC 的块设备/CSI attach 语义更受限 |
-| 选型直觉 | 要硬件隔离 + 最快恢复选 Firecracker；要快照创建/PCI/迁移选 Cloud Hypervisor；要最低固定开销、弱隔离选 Docker；要用户态内核隔离、快照/分叉且不换硬件 VM 选 gVisor；要嵌入库、跨 macOS/Windows 或分支/打包选 libkrun 系（smolvm/BoxLite） |
+**选型结论：**
+
+1. **可信内网 agent、只保留文件状态**：选 `runc` + volume/PVC。裸 runc 热启动 48 ms、空闲约 1 MiB，是本次最低的容器路径。
+2. **不可信 syscall、不要硬件隔离**：选 gVisor。原生启动 77 ms、空闲 57 MiB，300 MiB 负载 327 MiB。
+3. **必须硬件隔离**：选 Firecracker 或 Cloud Hypervisor。FC 恢复 19 ms、空闲 59.5 MiB；CLH 快照创建 0.70 s、设备能力更强。
+4. **微虚机进 K8s**：通常经 Kata，链路比 runc 多 VM 创建、guest 内核和 agent 握手；本次未实测 Kata。
+5. **Fast Sandbox 保持 FC**：理由是硬件隔离和 guest 内核控制；只比每沙箱内存，runc、Docker、gVisor 低于 FC。
+
+**核心数据（1 vCPU / 512 MiB，热缓存，PSS 口径）：**
+
+| 运行时 | 启动 | 空闲 PSS | 300 MiB 后 PSS | 快照 / 恢复 | 隔离 |
+|---|---:|---:|---:|---|---|
+| 裸 runc 1.2.2 | **0.048 s** | **0.95 MiB** | **300.7 MiB** | 需 CRIU（未测） | 共享内核 |
+| Docker 27.3.1 | 1.61 s start / 2.46 s run | 15.0 MiB | 306.7 MiB | commit 1.05 s（仅磁盘） | 共享内核 |
+| gVisor KVM | **0.077 s** 原生 / 1.74 s Docker start | 57.0 MiB | 326.7 MiB | 0.39 s / 0.15 s | 用户态内核 |
+| Firecracker 1.18 | 1.10 s | 59.5 MiB | 357.1 MiB | 2.22 s / **0.019 s** | 硬件 VM |
+| Cloud Hypervisor 54.1 | 1.07 s | 73.7 MiB | 371.7 MiB | 0.70 s / 0.013–0.37 s | 硬件 VM |
+| QEMU 6.2 microvm | 0.95 s | 122.0 MiB | 420.2 MiB | 未测 | 硬件 VM |
+
+> 启动边界：微虚机到 guest `/init`；裸 runc 到容器进入 running；Docker 到 `docker start` 完成；gVisor 原生到容器退出。Docker 的 1.61 s 含 CLI、daemon 和 shim；裸 runc 不含 K8s 的 pause 容器、CNI 和 kubelet。完整口径见 §2.3。smolvm/BoxLite 的端到端时间、启动 CPU、guest 内核对照见 §4–§7。
+
+**其余结论：**
+
+- **密度**：64 vCPU / 64 GiB / 4:1 超卖时，Docker 213、gVisor 200、FC 183、CLH 176、QEMU 155；1:1 的 64 vCPU 节点上全部上限 64，CPU 先撞顶。裸 runc 的 1 MiB 是引擎下限，生产 K8s 还有 shim/pause 开销。
+- **分时复用**：停计算、留文件；Docker/FC/CLH/QEMU/gVisor 都适合，smolvm/BoxLite 受镜像准备限制。不要用 commit 或 RAM 快照做文件持久化。
+- **Kata/K8s**：微虚机进 K8s 通常经 Kata，链路更长；本次未测 K8s 端到端和 Kata。
 
 ## 二、测试口径与边界
 
@@ -63,13 +74,14 @@ lsmod | grep kvm
 | smolvm | 1.35.0（2026-11-14） | 自带 libkrun + libkrunfw 5.5.0 |
 | BoxLite | 0.13.1（2026-11-12） | 默认 libkrun 引擎；原生 VMM 为 RC |
 | Docker | 27.3.1（containerd 1.7.24） | 原生 Docker Engine，cgroup v2 + systemd driver；`runc` 运行时 |
+| runc | 1.2.2（Ubuntu 22.04 包） | 独立 OCI runtime；本报告用它测引擎下限，不经过 Docker/containerd |
 | gVisor | release-20261109.0 | `runsc`（OCI spec 1.2.1）；KVM/ptrace 平台（WSL 上 systrap 启动失败） |
 | 根文件系统 | Alpine 3.22.8 minirootfs | 256 MiB ext4；自定义 `/init` 只做 proc/sys/dev 挂载并打印标记；Docker 镜像 `alpine-local:3.22`（8.3 MB） |
 
 ### 2.3 测量边界
 
 - **启动**：Firecracker/Cloud Hypervisor/QEMU 从进程启动到 guest `/init` 打印 `MVM_BOOT_END`；smolvm/BoxLite 从 CLI 进程启动到 guest 命令执行完成。后者包含镜像准备、CLI 启动、agent 握手和退出清理，不能直接当成 VMM 启动时间。
-- **容器启动**：Docker 用 `docker run`（CLI 启动到容器命令退出）和 `docker start`（预创建容器后启动并等待）两个边界；两者都包含 Docker CLI/daemon，不等于 runc 引擎本身。gVisor 另测原生 `runsc run`（CLI 启动到容器退出），用来区分引擎启动和 Docker 包装开销。
+- **容器启动**：Docker 用 `docker run`（CLI 启动到容器命令退出）和 `docker start`（预创建容器后启动并等待）两个边界；两者都包含 Docker CLI/daemon，不等于 runc 引擎本身。gVisor 另测原生 `runsc run`（CLI 启动到容器退出），用来区分引擎启动和 Docker 包装开销。裸 runc 用独立 OCI bundle：`runc run -d` 从命令启动到容器 init 进入 running，另拆 `runc create` + `runc start`；没有 shim、pause、CNI、K8s 控制面，是容器引擎的下限，不代表 K8s Pod 端到端启动。
 - **内存**：VMM 用宿主进程树 PSS（`/proc/<pid>/smaps_rollup`），不是 guest 配置内存。Docker/gVisor 同时记录 PSS 和 cgroup `memory.current`：PSS 含 shim/sentry/gofer，cgroup 含该容器计入的匿名页和页缓存；gVisor ptrace 的 PSS 会低估共享映射，以 cgroup 为准。guest 配置统一 512 MiB；VMM 普遍按需分配，所以“配置 512 MiB”不等于“宿主常驻 512 MiB”。
 - **300 MiB 触碰**：Firecracker/Cloud Hypervisor/QEMU/smolvm 在 guest `/dev/shm` 写入 300 MiB；BoxLite 的 `/dev/shm` 固定 64 MiB，改用主机静态二进制经 volume 挂入 guest，`malloc(300 MiB)` 并逐页写入。Docker/gVisor 用同一个静态 `memtest`：`malloc(300 MiB)`、逐页写入后 `sleep`。
 - **快照**：Firecracker/Cloud Hypervisor 用各自原生的 full snapshot API；gVisor 用原生 `runsc checkpoint/restore`；Docker 的 `commit` 是磁盘/镜像快照，`docker checkpoint` 需要 experimental + CRIU，本次未启用；smolvm/BoxLite 的 checkpoint 能力受镜像/运行时限制，未拿到可比数字，按机制记录。
@@ -90,6 +102,7 @@ lsmod | grep kvm
 | BoxLite | Rust CLI/库，默认 libkrun；原生 VMM 为 RC | KVM / HVF / WHP | libkrunfw（默认）；原生 VMM 固定内核 | 默认 6.12.87；原生 6.12.110 | virtio-mmio + virtio-fs/块设备/vsock | 磁盘 + 执行配置 checkpoint，REST-only；无 RAM 快照 |
 | Kata Containers | 容器运行时 + 每容器 VM；QEMU/CLH/FC/Dragonball 后端 | KVM | Kata 打包内核 | 4.3.1：6.18.56 | 取决于后端；guest agent 管理容器 | 无统一 VM 快照 API；取决于后端/CRIU，本次未实测 |
 | Docker（runc） | 容器运行时，无 VMM | 无（共享宿主内核） | 宿主内核 | 6.18.40.1-WSL2 | namespace/cgroup/seccomp/capabilities；runc + containerd shim | `docker commit` 磁盘镜像；`docker checkpoint` 需 CRIU/experimental |
+| 裸 runc | 容器运行时，无 VMM、无 daemon | 无（共享宿主内核） | 宿主内核 | 6.18.40.1-WSL2 | namespace/cgroup/seccomp/capabilities；直接执行 OCI bundle，无 shim | 无原生 checkpoint；需外部 CRIU |
 | gVisor | Go 用户态应用内核（Sentry），不是硬件 VM | KVM（KVM 平台）/ 无（ptrace、systrap） | 无 guest 内核 | n/a（`uname` 报 4.19.0-gvisor） | 实现 Linux ABI；runsc OCI runtime；KVM/ptrace | 原生 `runsc checkpoint/restore`；本次 300 MiB 工作负载镜像 301 MiB |
 | microsandbox | Rust，`msb_krun`（libkrun 分支）+ libkrunfw | KVM / HVF / WHP | libkrunfw 5.6.1，内核 6.12.117 | 6.12.117 | 与 libkrun 同类；fork/snapshot 为产品能力 | beta；fork/snapshot 未实测 |
 
@@ -105,7 +118,7 @@ lsmod | grep kvm
 
 **libkrun 把内核变成共享库。** `libkrunfw` 把 Linux 内核打包进 `.so`，libkrun 通过链接器把内核段映射进 guest，省去固件和内核文件加载；这也是 smolvm/BoxLite 能做到“无 daemon、单进程嵌入”的原因。代价是：内核版本跟随 libkrunfw 发行版，调用方很难单独替换；内核 config 也由 libkrunfw 决定（smolvm 的 6.18.60 config 没有 `CONFIG_IKCONFIG`，guest 内看不到 `/proc/config.gz`）。
 
-**Docker 是容器基线，不是 microVM。** runc 只负责 namespace/cgroup/挂载/能力收权，容器与宿主共享内核；启动和空闲内存的固定成本主要是 containerd-shim（本次约 14 MiB/容器），应用本身可以低到 1 MiB。它的快照是镜像层（`docker commit`），不保存运行中进程内存；Docker 的 checkpoint 走 CRIU，本次环境未启用 experimental，未测。
+**Docker 是容器基线，不是 microVM。** runc 只负责 namespace/cgroup/挂载/能力收权，容器与宿主共享内核；启动和空闲内存的固定成本主要是 containerd-shim（本次约 14 MiB/容器），应用本身可以低到 1 MiB。它的快照是镜像层（`docker commit`），不保存运行中进程内存；Docker 的 checkpoint 走 CRIU，本次环境未启用 experimental，未测。裸 runc 去掉 Docker/containerd 包装后，热启动 48 ms、空闲 PSS 0.95 MiB；生产 K8s 还要加 shim、pause 容器和 CNI，不能直接按这个下限做容量规划。
 
 **gVisor 用用户态内核换隔离，不启动 guest 内核。** Sentry 用 Go 实现 Linux ABI，应用 syscall 被 Sentry 截获；平台可选 ptrace、systrap、KVM。本次 WSL 上 systrap 报 `out of memory: unknown`，ptrace 与 KVM 可用；KVM 平台下空闲 PSS 57 MiB，300 MiB 触碰后 327 MiB（cgroup 313 MiB），原生 runsc 启动 77 ms。checkpoint 保存 Sentry/进程状态，300 MiB 工作负载镜像 301 MiB、创建 0.39 s、eager restore 0.15 s。
 
@@ -150,6 +163,7 @@ lsmod | grep kvm
 | 微虚机 | smolvm 1.35.0 | **1.470 s** | 1.370–4.345 s | guest 0.71 s（4 vCPU 单独探测） | 中位数已排除首次 4.35 s 的本地 rootfs 导入；端到端含 CLI/agent |
 | 微虚机 | BoxLite 0.13.1 | **3.940 s** | 3.786–4.616 s | guest 0.19 s | 首次 8.58 s；CLI 端到端含 2.741 s 镜像准备；VMM spawn 0.089 s |
 | 容器 | Docker 27.3.1（runc） | **2.461 s** `docker run` / **1.610 s** `docker start` | 2.321–4.109 / 1.565–1.742 | 无 guest 内核 | 含 Docker CLI/daemon；命令退出为边界 |
+| 容器 | 裸 runc 1.2.2 | **0.048 s** `runc run -d` / **0.009 s** `runc start` | 0.047–0.053（首次 0.119）；create 0.046–0.051 | 无 guest 内核 | 独立 OCI bundle；无 shim/CNI/K8s；冷启动 0.700 s |
 | 用户态内核 | gVisor KVM | **2.665 s** `docker run` / **1.744 s** `docker start` / **0.077 s** `runsc run` | 2.433–3.120 / 1.693–2.478 / 0.071–0.086（冷 0.829） | 无 guest 内核 | Docker 路径含 CLI/daemon；原生 runsc 是引擎启动 |
 | 用户态内核 | gVisor ptrace | **2.591 s** `docker run` | 2.579–2.730 | 无 guest 内核 | WSL 上 systrap 不可用，ptrace 作回退 |
 
@@ -158,7 +172,8 @@ lsmod | grep kvm
 - **三者热缓存启动都在 0.95–1.10 s，差距在 0.15 s 以内。** guest 内核到 `/init`：QEMU 0.44 s（无 ACPI/PCI）、Firecracker 0.54 s（ACPI + i8042）、Cloud Hypervisor 0.56 s（PCI virtio）。设备模型决定 guest 内的启动时间，但三者总 wall 很接近。
 - **Firecracker 之前的 1.389 s 是测试口径问题。** 自定义 `boot_args` 覆盖了 Firecracker 默认的 `i8042.noaux/nomux/dumbkbd`，guest 多花约 0.45 s 探测键盘控制器；改用官方默认参数后降到 1.102 s。不要为这 0.45 s 去裁剪内核——先保留默认启动参数。
 - **冷缓存会显著放大启动时间。** Firecracker 在重建 rootfs 后的首轮 guest uptime 是 2.31 s，随后 5 轮热缓存为 0.48–0.55 s。表中是热缓存中位数；跨机器比较必须固定缓存状态，否则会把存储 I/O 当成 VMM 差异。
-- **Docker 的 2.46 s 不是 runc 的引擎开销。** `docker run` 包含 CLI、create、daemon/containerd 和启动；预创建后 `docker start` 仍要 1.61 s。原生 gVisor `runsc run` 只有 0.077 s，说明容器引擎本身远快于 microVM；Docker 包装是主要成本。
+- **Docker 的 2.46 s 不是 runc 的引擎开销。** `docker run` 包含 CLI、create、daemon/containerd 和启动；预创建后 `docker start` 仍要 1.61 s。裸 runc 直接跑 OCI bundle 时 create 0.046–0.051 s + start 0.009 s，热启动中位数 0.048 s；原生 gVisor `runsc run` 只有 0.077 s。容器引擎本身远快于 microVM，Docker 包装是主要成本。
+- **裸 runc 的 0.048 s 是引擎下限，不是 K8s Pod 启动时间。** 它不含 containerd-shim、pause 容器、CNI、kubelet 和 CRI 调用；这些开销要单独测。
 - **gVisor 的 Docker 路径 2.67 s，只比 Docker runc 多约 0.2 s。** 原生 runsc 0.077 s 与 microVM 的 0.95–1.10 s 不是同一种启动：gVisor 不引导 guest 内核，只启动 Sentry 和容器进程；microVM 的时间花在内核解压/初始化、设备探测和 `/init`。
 - **libkrun 系的 guest 内核启动更快，但端到端不一定更快。** BoxLite 的 guest 内核到 `init.krun` 只有 ~0.19 s，smolvm ~0.71 s；但 BoxLite CLI 每次要花 2.74 s 准备镜像 rootfs，smolvm 也要导入本地 rootfs。BoxLite 的 3.94 s 里 VMM spawn 仅 0.089 s；对 sandbox 服务，应该用预构建模板、warm pool 或 snapshot 把镜像准备摊销掉。
 
@@ -176,14 +191,16 @@ PSS 为主，容器另列 cgroup；1 vCPU / 512 MiB guest；“空闲”指 gues
 | 微虚机 | smolvm | **118.5 MiB** | **428 MiB**（libkrun VM 416.2 + CLI 11.8） | — | `/dev/shm` 300 MiB；端到端 CLI 常驻 |
 | 微虚机 | BoxLite | **135.8 MiB**（libkrun VM 93 + CLI 42） | **303 MiB**（libkrun VM 259.7 + CLI 43.2） | — | 静态 malloc 300 MiB；分配/统计方式与其他行不同，见下 |
 | 容器 | Docker（runc） | **15.0 MiB**（shim 14.1 + app 0.9） | **306.7 MiB**（shim 6.4 + memtest 300.3） | **301.8 MiB** | 共享宿主内核；cgroup 空闲 2.6 MiB |
+| 容器 | 裸 runc 1.2.2 | **0.95 MiB** | **300.7 MiB** | **302.2 MiB** | 无 shim；cgroup 空闲 1.3 MiB；纯引擎下限，生产 K8s 还要加 shim/pause/CNI |
 | 用户态内核 | gVisor KVM | **57.0 MiB**（shim 14.3 + gofer 11.0 + sentry 31.8） | **326.7 MiB**（shim 6.4 + gofer 4.8 + sentry 315.5） | **312.8 MiB** | cgroup 空闲 11.1 MiB |
 | 用户态内核 | gVisor ptrace | — | 27.7 MiB（PSS 低估） | **310.2 MiB** | 按 cgroup 读；PSS 只算到 sentry 的部分映射 |
 
 ### 5.2 解释与容量规划
 
-- **配置内存 ≠ 宿主常驻。** 512 MiB 是 guest 的地址空间上限；VMM 用 mmap/按需分配，guest 没碰的页不会变成宿主 PSS。空闲时 Firecracker 只有 59.5 MiB，Cloud Hypervisor 73.7 MiB，Docker 15.0 MiB，gVisor KVM 57.0 MiB，说明启动只触碰了内核/页表/少量用户态页。
+- **配置内存 ≠ 宿主常驻。** 512 MiB 是 guest 的地址空间上限；VMM 用 mmap/按需分配，guest 没碰的页不会变成宿主 PSS。空闲时 Firecracker 只有 59.5 MiB，Cloud Hypervisor 73.7 MiB，裸 runc 0.95 MiB，Docker 15.0 MiB，gVisor KVM 57.0 MiB，说明启动只触碰了内核/页表/少量用户态页。
 - **有负载时按“触碰量 + 固定开销”估算。** 300 MiB guest 触碰对应 Firecracker 357 MiB、Cloud Hypervisor 372 MiB、QEMU 420 MiB、Docker 307 MiB（cgroup 302 MiB）、gVisor KVM 327 MiB（cgroup 313 MiB）；libkrun 系在 400–430 MiB（BoxLite 的 303 MiB 是异常低值，见下）。做容量规划时，建议用这个量级，再留 10–20% 给 guest 峰值、页缓存和 Fastlet/egress 等边车。
-- **容器基线：Docker 最低，gVisor 与 Firecracker 同量级。** Docker 的空闲 15.0 MiB 里 14.1 MiB 是 containerd-shim，应用只有 0.9 MiB；它共享宿主内核，不能把“15 MiB”当作“每个沙箱的隔离成本”与 microVM 直接比较。gVisor 的空闲 57.0 MiB 由 shim 14.3 + gofer 11.0 + Sentry 31.8 组成，和 Firecracker 的 59.5 MiB 接近；300 MiB 工作负载下 Sentry 的 PSS 315.5 MiB，cgroup 312.8 MiB。
+- **容器基线：裸 runc 最低，Docker 次之，gVisor 与 Firecracker 同量级。** 裸 runc 的空闲 0.95 MiB 只是 init 进程；Docker 的 15.0 MiB 里 14.1 MiB 是 containerd-shim，应用只有 0.9 MiB；它共享宿主内核，不能把“15 MiB”当作“每个沙箱的隔离成本”与 microVM 直接比较。gVisor 的空闲 57.0 MiB 由 shim 14.3 + gofer 11.0 + Sentry 31.8 组成，和 Firecracker 的 59.5 MiB 接近；300 MiB 工作负载下 Sentry 的 PSS 315.5 MiB，cgroup 312.8 MiB。
+- **裸 runc 的 0.95 MiB 只是 init 进程本身的 PSS，不是每沙箱服务成本。** Docker 的 15.0 MiB 里 14.1 MiB 是 containerd-shim；K8s 还会叠加 pause 容器和节点级 kubelet/CNI 开销。容量规划按实际运行时栈计，不要按裸 runc 的下限计。
 - **gVisor 的 PSS 口径要小心。** KVM 平台下 Sentry 的 PSS 能反映大部分内存；ptrace 平台下 300 MiB 工作负载的 PSS 只有 27.7 MiB，而 cgroup 是 310.2 MiB，说明内存主要落在共享映射里，PSS 会严重低估。比较 gVisor 时以 cgroup `memory.current` 为准，并注明平台。
 - **BoxLite 的 303 MiB 需要谨慎解读。** 它的 guest `/dev/shm` 被固定为 64 MiB，普通 `dd` 只能写 64 MiB；本次改用主机静态二进制挂载进 guest，`malloc(300 MiB)` 并逐页写入。宿主 PSS 259.7 MiB（libkrun VM）+ 43.2 MiB（CLI）仍低于 300 MiB + 预期开销，可能是 KVM 大页/零页、balloon 或 PSS 统计口径导致。**不要把 303 MiB 当作“BoxLite 比 Firecracker 更省内存”的结论**；它只说明“在本次方法下测得 303 MiB”。生产选型应在目标宿主机上用相同 workload 复测。
 - **libkrun 系的固定开销不低。** smolvm 的 libkrun VM 进程 416 MiB（300 MiB guest 触碰）比 FC/CLH 多约 60–70 MiB；BoxLite 的 libkrun VM 为 260 MiB，但 CLI 又占 43 MiB。对“节点资源受限、服务更多用户优先”的场景，libkrun 系的嵌入便利性要用内存密度来换。
@@ -197,13 +214,14 @@ Docker、gVisor KVM、Firecracker、Cloud Hypervisor、QEMU、smolvm、BoxLite �
 
 ### 6.2 启动 CPU
 
-| VMM | 启动 wall | 启动 CPU（user+sys） | 说明 |
+| 运行时 | 启动 wall | 启动 CPU | 说明 |
 |---|---:|---:|---|
 | Firecracker | ~1.10 s | ~1.01 s | 使用默认 i8042 参数后 wall 与 CPU 接近；旧 1.39 s 是自定义 cmdline 的偏差 |
 | Cloud Hypervisor | ~1.07 s | ~1.06 s | wall 与 CPU 接近，启动基本是 CPU-bound |
 | QEMU microvm | ~0.95 s | ~0.91 s | 同上 |
+| 裸 runc | 0.048 s | ~0.02 s（runc 自身）；容器 cgroup 12.8 ms | 无 guest 内核；不含 shim |
 
-启动阶段基本是单 vCPU 的 CPU-bound 工作：guest 内核解压/初始化、设备探测、页表构建。VMM 自身的 CPU 开销相对小；差距更多来自 guest 内核 config 和设备模型。容器路径没有单独拆分启动 CPU：`docker run` 的 1.6–2.5 s wall 主要由 Docker CLI/daemon/containerd 消耗，进程树跨多个常驻进程；原生 gVisor 0.077 s 的 CPU 也未单独采集。
+启动阶段基本是单 vCPU 的 CPU-bound 工作：guest 内核解压/初始化、设备探测、页表构建。VMM 自身的 CPU 开销相对小；差距更多来自 guest 内核 config 和设备模型。容器路径中，裸 runc 已拆分：runc 自身约 0.02 s，容器 cgroup 12.8 ms。Docker 路径没有单独拆分：`docker run` 的 1.6–2.5 s wall 主要由 Docker CLI/daemon/containerd 消耗，进程树跨多个常驻进程；原生 gVisor 0.077 s 的 CPU 也未单独采集。
 
 ### 6.3 业务 CPU
 
@@ -225,6 +243,7 @@ Docker、gVisor KVM、Firecracker、Cloud Hypervisor、QEMU、smolvm、BoxLite �
 | 微虚机 | QEMU 6.2 microvm | 未测 | — | 未测 | 没有 Firecracker 式 snapshot API；microvm 文档明确不支持跨 QEMU 版本 live migration |
 | 微虚机 | crosvm | 未测 | — | 未测 | snapshot 框架为 highly experimental、限定设备；上游文档写明 “100% not supported” |
 | 微虚机 | Kata 4.3.1 | 未测 | — | 未测 | 没有统一 VM 快照 API；取决于后端/CRIU |
+| 容器 | 裸 runc | 不支持原生 checkpoint | — | — | 需外部 CRIU；本次未装 |
 | 容器 | Docker commit | **1.047 s** | **8.3 MB** | 新容器启动（未单独测） | 磁盘/镜像快照，不含 RAM；restore 是重新 `docker run` |
 | 容器 | Docker checkpoint | 未测 | — | — | 需 experimental + CRIU；本次环境未启用 |
 | 用户态内核 | gVisor KVM（idle） | **0.078 s** | **120 KiB** | **0.090 s** | 原生 runsc；`--leave-running`；image 为 pages/checkpoint |
@@ -248,7 +267,7 @@ Docker、gVisor KVM、Firecracker、Cloud Hypervisor、QEMU、smolvm、BoxLite �
 
 **BoxLite：checkpoint 是磁盘快照，不是内存快照。** 本地 runtime 明确报 “checkpoints are only implemented for REST runtimes”；checkpoint 捕获的是磁盘 + 执行配置，restore 是新建一个 box 后从磁盘启动，不是恢复 RAM。它的价值在“快速复制已安装环境”，不在“毫秒级恢复运行中的会话”。如果业务需要保存执行中的内存状态，BoxLite 不是这条路径。
 
-**Docker：commit 是磁盘快照，不是运行态快照。** `docker commit` 1.05 s 生成 8.3 MB 镜像，只包含文件系统层，不保存进程内存；restore 等价于从该镜像启动一个新容器（本次未单独计 restore）。Docker 的 `checkpoint` 走 CRIU，需要 experimental 和 CRIU，本次环境未启用；对“保存运行中的沙箱会话”，commit 不够。
+**Docker：commit 是磁盘快照，不是运行态快照。** `docker commit` 1.05 s 生成 8.3 MB 镜像，只包含文件系统层，不保存进程内存；restore 等价于从该镜像启动一个新容器（本次未单独计 restore）。Docker 的 `checkpoint` 走 CRIU，需要 experimental 和 CRIU，本次环境未启用；对“保存运行中的沙箱会话”，commit 不够。裸 runc 没有原生 checkpoint，需要外部 CRIU，本次同样未测。
 
 **gVisor：用户态内核的 checkpoint 介于容器和 microVM 之间。** 空闲容器 checkpoint 0.078 s / 120 KiB、restore 0.090 s；300 MiB 触碰后 0.390 s / 301 MiB，eager restore 0.152 s，默认 async 0.095 s。创建比 Firecracker（2.22 s）和 Cloud Hypervisor（0.70 s）快，恢复比 Firecracker（0.019 s）慢、比 Cloud Hypervisor 默认 eager（0.367 s）快。代价是 gVisor 的 syscall 兼容性和开销，以及 checkpoint 的平台/版本约束。
 
@@ -260,27 +279,28 @@ Docker、gVisor KVM、Firecracker、Cloud Hypervisor、QEMU、smolvm、BoxLite �
 
 | 优先级 | 推荐 | 理由 |
 |---|---|---|
-| 最低固定内存/最高密度（弱隔离） | **Docker（runc）** | 空闲 15.0 MiB、300 MiB 负载 306.7 MiB（cgroup 301.8）；共享宿主内核，隔离只到 namespace/cgroup/seccomp；不能用于需要硬件隔离的不可信负载 |
+| 最低固定内存/最高密度（弱隔离） | **裸 runc**；生产容器路径用 Docker | 裸 runc 空闲 0.95 MiB、300 MiB 负载 300.7 MiB（cgroup 302.2）；Docker 15.0/306.7（cgroup 301.8）；共享宿主内核，隔离只到 namespace/cgroup/seccomp |
+| 可信内网 agent + volume/PVC | **runc + volume/PVC** | 48 ms、约 1 MiB；停容器保留卷；PVC 的 CSI attach/mount 单独计量；K8s 路径还要加 shim/pause |
 | 用户态内核隔离 + 快照/分叉 | **gVisor（KVM 平台）** | 空闲 57 MiB、300 MiB 负载 326.7 MiB（cgroup 312.8）；原生启动 0.077 s；300 MiB checkpoint 0.39 s / 301 MiB、eager restore 0.15 s；代价是 syscall 兼容性和开销 |
 | 恢复延迟优先（warm pool、模板恢复、分叉） | **Firecracker** | 512 MiB guest full snapshot restore 19 ms；设备模型小，行为可预测；成熟 jailer/最小攻击面 |
 | 快照创建速度 + 设备能力/迁移 | **Cloud Hypervisor** | 0.70 s 创建；PCI/ACPI/热插拔/vhost-user/迁移；`ondemand`/COW 恢复可到 13–15 ms |
-| 单节点密度（**必须硬件隔离**时） | **Firecracker**，其次 **Cloud Hypervisor** | 在硬件隔离约束下比较：空闲 60/74 MiB、300 MiB 触碰 357/372 MiB；若允许共享内核/用户态内核，Docker（15/307）和 gVisor（57/327）的内存密度更高，见 §11 |
-| 启动速度（热缓存，硬件隔离） | **QEMU microvm / Cloud Hypervisor / Firecracker** | 热缓存 0.95–1.10 s；Docker `run` 2.46 s、gVisor `run` 2.67 s 是 CLI 包装；gVisor 原生 0.077 s 不引导 guest 内核 |
+| 单节点密度（**必须硬件隔离**时） | **Firecracker**，其次 **Cloud Hypervisor** | 在硬件隔离约束下比较：空闲 60/74 MiB、300 MiB 触碰 357/372 MiB；若允许共享内核/用户态内核，裸 runc（0.95/301）、Docker（15/307）和 gVisor（57/327）的内存密度更高，见 §11 |
+| 启动速度（热缓存，硬件隔离） | **QEMU microvm / Cloud Hypervisor / Firecracker** | 热缓存 0.95–1.10 s；裸 runc 0.048 s 是容器引擎下限；Docker `run` 2.46 s、gVisor `run` 2.67 s 是 CLI 包装；gVisor 原生 0.077 s 不引导 guest 内核 |
 | 嵌入到应用、跨 macOS/Windows、本地 agent sandbox | **libkrun 系（smolvm/BoxLite）** | 单库/单进程、无 daemon；WHP/HVF 路径；smolvm 还有 branch/pack；代价是内核随 libkrunfw 走、内存开销略高 |
 | 完全控制 guest 内核/config | **Firecracker / Cloud Hypervisor / QEMU / crosvm** | BYO 内核；可以按 workload 裁剪；libkrun 的内核封装在 `.so` 里，替换成本高；Docker/gVisor 没有 guest 内核 |
 | 需要 PCI 设备、热插拔、迁移 | **Cloud Hypervisor**（或 QEMU q35） | microvm 不适合；FC 的 PCI 是可选但设备面仍小 |
 | 需要容器运行时/每容器 VM 的成熟编排 | **Kata Containers** | 运行时 + agent + 多 hypervisor 后端；代价是栈重、快照不统一 |
-| 不需要硬件 VM、要低开销隔离 | **gVisor**（用户态内核）或 **Docker**（共享内核） | gVisor 的隔离强于 runc，启动/内存接近 FC；Docker 最轻但隔离最弱；两者都不是硬件 VM，不能拿“guest 内核版本”比较 |
+| 不需要硬件 VM、要低开销隔离 | **gVisor**（用户态内核）、**runc/Docker**（共享内核） | gVisor 的隔离强于 runc，启动/内存接近 FC；runc 最轻但隔离最弱，Docker 多了 shim；三者都不是硬件 VM，不能拿“guest 内核版本”比较 |
 
-> 密度结论分两层：**只比每沙箱内存，Docker > gVisor > Firecracker > Cloud Hypervisor > smolvm ≈ QEMU > BoxLite**；FC/CLH 的“高密度”只成立于“必须硬件 VM 隔离”的约束下。1 vCPU/512 MiB、1:1 的 64 vCPU 节点上，所有方案都先撞 64 个 CPU 上限，内存差异要到高超卖或内存紧张节点才体现。
+> 密度结论分两层：**只比每沙箱内存，裸 runc > Docker > gVisor > Firecracker > Cloud Hypervisor > smolvm ≈ QEMU > BoxLite**；裸 runc 是引擎下限，生产 K8s 还要加 shim/pause；FC/CLH 的“高密度”只成立于“必须硬件 VM 隔离”的约束下。1 vCPU/512 MiB、1:1 的 64 vCPU 节点上，所有方案都先撞 64 个 CPU 上限，内存差异要到高超卖或内存紧张节点才体现。
 
 ### 8.2 一句话选型
 
 - **做“可恢复的沙箱池”**：Firecracker 或 Cloud Hypervisor；恢复延迟优先 FC，快照创建/设备能力优先 CLH。如果只需要用户态内核隔离、能接受 0.15 s 级恢复，gVisor 的 0.39 s checkpoint 也可用；Docker commit 不保存运行态，不适合这条路径。
-- **做“本地开发/agent 工具”**：smolvm/BoxLite 的嵌入和跨平台更省事；注意镜像准备和 checkpoint 的镜像可移植性。信任的代码用 Docker 最轻；不可信 syscall 用 gVisor。
-- **做“agent 执行环境 + volume/PVC”**：文件状态挂 volume/PVC、进程可重启时，优先 runc（可信）或 gVisor（不可信 syscall）；只有必须硬件隔离时才上 FC/Kata。PVC 的 CSI attach/mount 延迟要单独计入启动 SLA。
-- **做“每容器 VM 的 K8s 运行时”**：Kata；不要期待统一的 VM 快照 API。
-- **做“容器级隔离但不换运行时”**：gVisor 的隔离强于 runc，但仍有 syscall 兼容性和开销；Docker 隔离最弱。两者都不是 microVM，不能拿“guest 内核版本”比较。
+- **做“本地开发/agent 工具”**：smolvm/BoxLite 的嵌入和跨平台更省事；注意镜像准备和 checkpoint 的镜像可移植性。信任的代码用 runc/Docker 最轻；不可信 syscall 用 gVisor。
+- **做“agent 执行环境 + volume/PVC”**：文件状态挂 volume/PVC、进程可重启时，优先 runc（可信）或 gVisor（不可信 syscall）；只有必须硬件隔离时才上 FC/Kata。裸 runc 热启动 48 ms、空闲 0.95 MiB；Docker 1.61 s start / 15 MiB；gVisor 原生 0.077 s / 57 MiB；FC 1.10 s / 59.5 MiB。PVC 的 CSI attach/mount 延迟要单独计入启动 SLA。
+- **做“每容器 VM 的 K8s 运行时”**：Kata；不要期待统一的 VM 快照 API。微虚机经 Kata 进 K8s 的链路比 runc 多 VM 创建、guest 内核和 agent 握手。
+- **做“容器级隔离但不换运行时”**：gVisor 的隔离强于 runc，但仍有 syscall 兼容性和开销；runc/Docker 隔离最弱。三者都不是 microVM，不能拿“guest 内核版本”比较。
 
 ## 九、对 OpenSandbox 的落点
 
@@ -290,10 +310,10 @@ OpenSandbox 的 Fast Sandbox 已经走 Firecracker 路径：模板声明 guest k
 2. **保持 block rootfs，不要为了“看起来现代”加 virtio-fs。** FC 的 CI config 明确 `# CONFIG_VIRTIO_FS is not set`；Fast Sandbox 当前用块设备 + TAP 网络，和这个 config 匹配。只有确实需要共享目录时才自定义内核并承担额外攻击面。
 3. **使用 Firecracker 默认的 i8042 启动参数，不要为 0.45 s 去裁剪内核。** FC 的默认 cmdline 已带 `i8042.noaux/nomux/dumbkbd`；本次旧数 1.389 s 是因为自定义 `boot_args` 覆盖了它们。改用默认参数后 1.102 s，和 Cloud Hypervisor/QEMU 同量级。模板若自定义 cmdline，应显式保留这三项，并单独验证串口/关机路径。
 4. **快照成本按“创建 2 s / 恢复 19 ms”做预算。** 对 512 MiB guest，full snapshot 约 513 MiB、创建 2.2 s；恢复 19 ms。批量恢复时瓶颈在存储带宽和快照创建时的 CPU/IO，不在 resume。任务型 workload 继续“重建优于快照”；只有长会话/敏感池才值得为快照付出 2 s 创建成本。如果引入 gVisor，按“300 MiB 负载 0.39 s / 301 MiB / eager 0.15 s”另算；Docker commit 1.05 s / 8.3 MB 只是磁盘层，不保存运行态，不能替代 `vmstate.snap`。
-5. **内存容量按 PSS/cgroup 而不是配置内存算。** 512 MiB guest 在 guest 触碰 300 MiB 时，FC 宿主 PSS 约 357 MiB；空闲约 60 MiB。Docker 空闲 15 MiB、300 MiB 负载 307 MiB（cgroup 302）；gVisor KVM 空闲 57 MiB、300 MiB 负载 327 MiB（cgroup 313）。节点容量规划应使用“活跃沙箱的触碰量 + VMM/Sentry/shim 固定开销 + Fastlet/egress 边车 + 10–20% 余量”，不要用 512 MiB × 沙箱数做简单乘法。
+5. **内存容量按 PSS/cgroup 而不是配置内存算。** 512 MiB guest 在 guest 触碰 300 MiB 时，FC 宿主 PSS 约 357 MiB；空闲约 60 MiB。裸 runc 空闲 0.95 MiB、300 MiB 负载 301 MiB（cgroup 302）；Docker 空闲 15 MiB、300 MiB 负载 307 MiB（cgroup 302）；gVisor KVM 空闲 57 MiB、300 MiB 负载 327 MiB（cgroup 313）。节点容量规划应使用“活跃沙箱的触碰量 + VMM/Sentry/shim 固定开销 + Fastlet/egress 边车 + 10–20% 余量”，不要用 512 MiB × 沙箱数做简单乘法。
 6. **Cloud Hypervisor 是值得保留的备选。** 如果后续需要 PCI 设备、热插拔、迁移，或者快照创建速度成为瓶颈，CLH 的 0.70 s 创建 + ondemand/COW 13–15 ms 恢复很有竞争力；但切换运行时会影响 Fast Sandbox 的 artifact、checkpoint 和 node readiness，不能只看 benchmark。
 7. **把“libkrun 系内核碎片化”当成供应链风险。** smolvm 6.18.60、BoxLite 6.12.87、microsandbox 6.12.117 说明“基于 libkrun”不保证同一内核；如果未来在本地开发/边缘节点引入 libkrun，必须把 libkrunfw 版本和内核 config 纳入清单，不能只记录“libkrun”。
-8. **Docker/gVisor 是基线或可选 runtime，不是 Fast Sandbox 的替代。** Docker 共享宿主内核，适合可信任务；gVisor 提供用户态内核隔离，适合 syscall 级不可信负载，但 checkpoint、网络和存储语义都与 Firecracker 不同。Fast Sandbox 若继续走硬件隔离，保持 FC；把 gVisor 作为“隔离强度/启动/恢复”三维度的备选时，需要单独验证 execd、TAP 网络、S3 中间件和快照模板。Fast Sandbox 保持 FC 的原因是硬件隔离和 guest 内核控制；如果只追求密度且能接受弱隔离，Docker/gVisor 的每沙箱内存低于 FC。
+8. **Docker/gVisor 是基线或可选 runtime，不是 Fast Sandbox 的替代。** Docker 共享宿主内核，适合可信任务；gVisor 提供用户态内核隔离，适合 syscall 级不可信负载，但 checkpoint、网络和存储语义都与 Firecracker 不同。Fast Sandbox 若继续走硬件隔离，保持 FC；把 gVisor 作为“隔离强度/启动/恢复”三维度的备选时，需要单独验证 execd、TAP 网络、S3 中间件和快照模板。Fast Sandbox 保持 FC 的原因是硬件隔离和 guest 内核控制；如果只追求密度且能接受弱隔离，runc/Docker/gVisor 的每沙箱内存低于 FC。裸 runc 的 0.048 s / 0.95 MiB 是容器引擎下限，生产 K8s 还要加 shim/pause/CNI。
 
 ## 十、复现命令
 
@@ -414,6 +434,26 @@ smolvm / BoxLite 启动：
 Docker / gVisor：
 
 ```bash
+# 裸 runc（独立 OCI bundle，不经过 Docker/containerd）
+mkdir -p /root/mvm/runc-bundle/rootfs
+tar xzf /root/mvm/alpine.tar.gz -C /root/mvm/runc-bundle/rootfs
+cd /root/mvm/runc-bundle && runc spec
+python3 - <<'PY'
+import json
+p = 'config.json'
+c = json.load(open(p))
+c['process']['args'] = ['/bin/sleep', '300']
+c['process']['terminal'] = False
+c['root']['path'] = '/root/mvm/runc-bundle/rootfs'
+c['linux']['cgroupsPath'] = '/runc-demo/idle'
+c['linux']['resources'] = {'memory': {'limit': 512 << 20}, 'cpu': {'quota': 100000, 'period': 100000}}
+c['mounts'].append({'destination': '/host', 'type': 'bind', 'source': '/root/mvm', 'options': ['rbind', 'ro']})
+json.dump(c, open(p, 'w'), indent=2)
+PY
+time runc run -d runc-demo
+cat /sys/fs/cgroup/runc-demo/idle/memory.current
+runc delete -f runc-demo
+
 # Docker（本地 Alpine 镜像）
 docker run --rm --cpus=1 --memory=512m alpine-local:3.22 sh -c 'echo MVM_BOOT_END'
 docker commit <container> osb-bench-commit:latest
@@ -455,7 +495,7 @@ runsc --root /root/mvm/runsc-restore --platform=kvm restore --background=false \
 
 - 节点：**64 vCPU / 64 GiB（1 GiB/core）**，CPU 超卖 **4:1**（256 个可调度 vCPU），1 TiB NVMe。
 - 沙箱：1 vCPU / 512 MiB guest；分别按“只触碰 300 MiB”和“全部 512 MiB 驻留”估算。
-- 固定开销取第 5 节的 PSS：Docker 15.0、gVisor 57.0、Firecracker 59.5、Cloud Hypervisor 73.7、QEMU 122.0、smolvm 118.5、BoxLite 135.8 MiB。
+- 固定开销取第 5 节的 PSS：裸 runc 0.95、Docker 15.0、gVisor 57.0、Firecracker 59.5、Cloud Hypervisor 73.7、QEMU 122.0、smolvm 118.5、BoxLite 135.8 MiB。裸 runc 是引擎下限，密度表同时列出；生产 K8s 还要加 shim/pause。
 - 公式：
   - `N_cpu = floor(64 × 4 / 1) = 256`
   - `N_mem = floor(64 × 1024 / (touched + fixed))`
@@ -467,19 +507,21 @@ runsc --root /root/mvm/runsc-restore --platform=kvm restore --background=false \
 
 | 方案 | 固定开销 | 300 MiB 活跃 | 512 MiB 活跃（模型） | N_mem(300M) | N_mem(512M) | N_max(300M) | N_max(512M) | 内存口径排序 |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| Docker（runc） | 15.0 MiB | **306.7 MiB** | 527 MiB | **213** | **124** | **213** | **124** | 1 |
-| gVisor KVM | 57.0 MiB | **326.7 MiB** | 569 MiB | **200** | **115** | **200** | **115** | 2 |
-| Firecracker | 59.5 MiB | **357.1 MiB** | 572 MiB | **183** | **114** | **183** | **114** | 3 |
-| Cloud Hypervisor | 73.7 MiB | **371.7 MiB** | 586 MiB | **176** | **111** | **176** | **111** | 4 |
-| QEMU microvm | 122.0 MiB | **420.2 MiB** | 634 MiB | **155** | **103** | **155** | **103** | 5（300M）/ 6（512M） |
-| smolvm | 118.5 MiB | **428 MiB** | 630 MiB | **153** | **104** | **153** | **104** | 6（300M）/ 5（512M） |
-| BoxLite | 135.8 MiB | **435.8 MiB**（保守） | 648 MiB | **150** | **101** | **150** | **101** | 7 |
+| 裸 runc（引擎下限） | 0.95 MiB | **300.7 MiB** | 512.95 MiB | **217** | **127** | **217** | **127** | 1 |
+| Docker（runc） | 15.0 MiB | **306.7 MiB** | 527 MiB | **213** | **124** | **213** | **124** | 2 |
+| gVisor KVM | 57.0 MiB | **326.7 MiB** | 569 MiB | **200** | **115** | **200** | **115** | 3 |
+| Firecracker | 59.5 MiB | **357.1 MiB** | 572 MiB | **183** | **114** | **183** | **114** | 4 |
+| Cloud Hypervisor | 73.7 MiB | **371.7 MiB** | 586 MiB | **176** | **111** | **176** | **111** | 5 |
+| QEMU microvm | 122.0 MiB | **420.2 MiB** | 634 MiB | **155** | **103** | **155** | **103** | 6（300M）/ 7（512M） |
+| smolvm | 118.5 MiB | **428 MiB** | 630 MiB | **153** | **104** | **153** | **104** | 7（300M）/ 6（512M） |
+| BoxLite | 135.8 MiB | **435.8 MiB**（保守） | 648 MiB | **150** | **101** | **150** | **101** | 8 |
 
 ### 11.3 怎么读
 
-- **在 1 vCPU / 512 MiB、1:1 不超卖的 64 vCPU 节点上，所有方案的上限都是 64 个。** 64 GiB 节点上 `N_mem` 有 150–213，256 GiB 节点上为 600–850，均远大于 64；CPU 先成为瓶颈，内存固定开销的差异体现不出来。
+- **在 1 vCPU / 512 MiB、1:1 不超卖的 64 vCPU 节点上，所有方案的上限都是 64 个。** 64 GiB 节点上 `N_mem` 有 150–217，256 GiB 节点上为 600–850，均远大于 64；CPU 先成为瓶颈，内存固定开销的差异体现不出来。
 - **只有 CPU 超卖、每沙箱 vCPU 更少，或节点内存更紧时，固定开销才决定密度。** 上表用 64 GiB 内存 + 4:1 超卖把差异放大；同样的排序在 256 GiB 节点上要超卖到 16:1 左右才会出现。
-- **内存口径排序：Docker > gVisor > Firecracker > Cloud Hypervisor > smolvm ≈ QEMU > BoxLite。** Docker 领先来自共享宿主内核和 15 MiB 固定开销；gVisor 的 57 MiB 与 Firecracker 的 59.5 MiB 几乎同档；QEMU 的 122 MiB 和 BoxLite 的 135.8 MiB 固定开销最高。300 MiB 与 512 MiB 两种口径下 QEMU/smolvm 的顺序会互换，差异在 1–2 个沙箱以内。所以“高密度选 FC”只在“必须硬件隔离”的前提下成立；只比内存密度，Docker > gVisor > FC。
+- **内存口径排序：裸 runc > Docker > gVisor > Firecracker > Cloud Hypervisor > smolvm ≈ QEMU > BoxLite。** 裸 runc 的 0.95 MiB 是引擎下限；Docker 领先来自共享宿主内核和 15 MiB 固定开销；gVisor 的 57 MiB 与 Firecracker 的 59.5 MiB 几乎同档；QEMU 的 122 MiB 和 BoxLite 的 135.8 MiB 固定开销最高。300 MiB 与 512 MiB 两种口径下 QEMU/smolvm 的顺序会互换，差异在 1–2 个沙箱以内。所以“高密度选 FC”只在“必须硬件隔离”的前提下成立；只比内存密度，runc > Docker > gVisor > FC。
+- **裸 runc 行只表示引擎下限。** K8s/containerd 生产路径每 Pod 还有 shim、pause 容器和 CNI，实际密度接近 Docker 行；不要把 217 当成 Pod 密度。
 - **这些是活跃沙箱的上限。** 如果闲置时用 SIGSTOP/冻结保留 RAM，密度仍然受 `N_mem` 限制，不会因为“暂停”而提高；要释放内存必须停止计算进程，只保留文件状态（见下一节）。
 - **磁盘也要算进 `N_max`。** 1 TiB / 256 MiB rootfs ≈ 4096 个完整副本；共享只读基座 + reflink/overlay 只存变更块时还能更高，但要受 inode、元数据和 IOPS 限制。
 
@@ -501,6 +543,7 @@ runsc --root /root/mvm/runsc-restore --platform=kvm restore --background=false \
 | 方案 | 文件状态载体 | 闲置动作 | 恢复路径 | 恢复时间 | 适配度 |
 |---|---|---|---|---|---|
 | Docker（runc） | 容器可写层 / named volume / bind mount | `docker stop` | `docker start`（或重新 `run` 挂同一 volume） | 1.61 s（start）/ 2.46 s（run） | **高**（可信负载） |
+| 裸 runc | bundle rootfs / volume | 停止容器 | `runc run` | 0.048 s | **高**（可信负载） |
 | Firecracker | rootfs 块设备（ext4/XFS reflink） | 停止 VMM 进程 | 冷启动内核 + 挂同一 rootfs | 1.10 s | **高** |
 | Cloud Hypervisor | 磁盘镜像 / rootfs | 停止 VMM 进程 | 冷启动 + 挂同一磁盘 | 1.07 s | **高** |
 | QEMU microvm | 磁盘镜像 / rootfs | 停止 QEMU 进程 | 冷启动 + 挂同一磁盘 | 0.95 s | **高** |
@@ -518,7 +561,7 @@ runsc --root /root/mvm/runsc-restore --platform=kvm restore --background=false \
 
 ### 12.4 适配度结论
 
-- **最适合高频分时复用**：Docker（可信负载、运维最简单）、Firecracker / Cloud Hypervisor / QEMU microvm（硬件隔离、冷启动约 1 s）、gVisor（用户态隔离、原生启动 77 ms）。
+- **最适合高频分时复用**：裸 runc/Docker（可信负载、运维最简单）、Firecracker / Cloud Hypervisor / QEMU microvm（硬件隔离、冷启动约 1 s）、gVisor（用户态隔离、原生启动 77 ms）。
 - **适合低频/本地场景**：smolvm（1.47 s、镜像导入约束）、BoxLite（3.94 s，CLI 镜像准备占大头）；Kata 适合已有 K8s + 每容器 VM 编排。
 - **推荐策略**：
   - 共享只读基座 + 每沙箱可写层/reflink；闲置超时后停止计算，保留文件状态；下次请求冷启动。
@@ -530,7 +573,7 @@ runsc --root /root/mvm/runsc-restore --platform=kvm restore --background=false \
 
 如果 agent 只把沙箱当执行环境、进程可以重启，文件状态放在 volume/PVC，那么 **runc/gVisor + volume/PVC 往往比 Firecracker 更合适**：
 
-- **密度与启动**：runc 固定开销 15 MiB、gVisor 57 MiB；gVisor 原生启动 0.077 s（runc 原生未单独测，Docker 路径 1.61 s start / 2.46 s run 包含 daemon）；FC 59.5 MiB、1.10 s。K8s 的 CRI 路径不会和 Docker CLI 完全一样；PVC 的 CSI attach/mount 时间要单独测，可能比引擎启动更贵。
+- **密度与启动**：裸 runc 热启动 0.048 s、空闲 0.95 MiB（cgroup 1.3 MiB）；Docker 路径 15 MiB / 1.61 s start（含 shim/daemon）；gVisor 57 MiB / 原生 0.077 s；FC 59.5 MiB / 1.10 s。K8s 的 CRI 路径会再叠加 pause 容器、CNI 和 kubelet 开销；PVC 的 CSI attach/mount 时间要单独测，可能比引擎启动更贵。
 - **存储形态**：Docker 用 named volume / bind mount；K8s 用 PVC（每沙箱一个 RWO，RWX 需要 NFS/CephFS 等）；gVisor 通过 gofer 挂载；FC/CLH 需要块设备作为 rootfs 或 virtio-fs，PVC 的块设备/文件系统语义更受限。
 - **适用条件**：代码可信或在内网、隔离只到进程级；或能接受 gVisor 的 syscall 兼容性；PVC attach 延迟可接受；agent 能从文件恢复，不依赖进程内存、长连接或浏览器会话。
 - **不适合**：多租户不可信代码、合规要求硬件隔离；PVC attach 成为启动瓶颈；agent 需要保留内存数据库、浏览器会话或长连接。
@@ -560,4 +603,5 @@ runsc --root /root/mvm/runsc-restore --platform=kvm restore --background=false \
 - gVisor：<https://github.com/google/gvisor>；release-20261109.0：<https://github.com/google/gvisor/releases/tag/release-20261109.0>；checkpoint/restore：<https://github.com/google/gvisor/blob/master/g3doc/user_guide/checkpoint_restore.md>
 - Docker commit：<https://docs.docker.com/reference/cli/docker/container/commit/>；Docker checkpoint：<https://docs.docker.com/reference/cli/docker/checkpoint/>；gVisor Docker 集成：<https://gvisor.dev/docs/user_guide/quick_start/docker/>
 - microsandbox：<https://github.com/superradcompany/microsandbox>
+- runc：<https://github.com/opencontainers/runc>；OCI runtime spec：<https://github.com/opencontainers/runtime-spec>
 - OpenSandbox Fast Sandbox Firecracker：`docs/architecture/fast-sandbox/firecracker.md`、`docs/architecture/fast-sandbox/templates.md`、`docs/architecture/fast-sandbox/performance.md`
