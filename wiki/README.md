@@ -50,6 +50,7 @@
 | [微虚机、Docker、gVisor 与裸 runc 沙箱实测：性能、密度与分时复用](opensandbox-microvm-kernel-and-sandbox-metrics-comparison.md) | WSL2 嵌套 KVM 实测 Firecracker / Cloud Hypervisor / QEMU microvm / smolvm / BoxLite、Docker / gVisor 与裸 runc 的启动、PSS/cgroup、CPU、快照与恢复；结论先行动线、统一核心数据表、理论密度上限、保留文件状态的分时复用适配度、agent 沙箱 volume/PVC 形态，以及 OpenSandbox Fast Sandbox 的落点 | 2026-11-15 |
 | [沙箱运行时选型：核心实测结论](opensandbox-sandbox-runtime-selection-core-findings.md) | 从实测提炼：裸 runc 热启动 48 ms / 空闲约 1 MiB、gVisor 原生 77 ms、Firecracker 1.10 s；启动/内存/密度分层结论（“高密度选 FC”仅在必须硬件隔离时成立）；微虚机经 Kata 进 K8s 的链路成本；runc/gVisor + volume/PVC 选型表；未测 K8s/Kata/PVC CSI 的边界 | 2026-11-15 |
 | [沙箱运行时选型：极简版](opensandbox-sandbox-runtime-selection-minimal.md) | 按 STE-zh 简明技术中文编写：五条结论、六行核心数据、五条选型、四条边界；适合快速决策和评审传阅 | 2026-11-15 |
+| [沙箱出口流量如何精准牵引到节点级透明代理（CubeSandbox / OpenShell 拆解与路线选型）](opensandbox-egress-steering-to-node-proxy.md) | 四维控流框架（选流/送流/主体识别/原始目的还原）；CubeSandbox eBPF mark + TPROXY + 透明监听链路与凭证交换；OpenShell 为何不需要节点级透明代理（seccomp/synthetic DNS/per-sandbox supervisor）；R1–R10 十条路线对比、池化/microVM/单机选型与 P0 验收判据 | 2026-11-16 |
 
 ## 方案设计
 
