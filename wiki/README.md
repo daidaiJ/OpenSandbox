@@ -1,0 +1,132 @@
+# OpenSandbox 调研 / 方案文档索引（wiki）
+
+本目录集中存放针对 OpenSandbox 的调研报告、技术方案与优化方案文档（用户约定）。
+
+> **维护规则**：新增 wiki 文档时，提交前必须同步更新本 README 索引；删除/重命名文档时同样需要同步。详见根目录 `AGENTS.md`。
+
+## 调研与分析
+
+> 🚧 标记 = 该文档追踪的**上游功能仍在逐步实现**（OSEP status: implementing），上游每合并一个新阶段后需回访同步本文档。
+
+| 文档 | 主题 | 日期 |
+|---|---|---|
+| [CRD 控制器调谐逻辑与规模化性能风险分析](opensandbox-crd-controller-reconcile-analysis.md) | BatchSandbox/Pool 调谐逻辑、调度器与注解流、规模化性能风险 | 2026-08-07 |
+| [Kubernetes 算子缺陷与坑总结（性能 & 规模化）](opensandbox-controller-defects-and-pitfalls.md) | 控制器缺陷、性能瓶颈、规模化陷阱（数百~数千 BatchSandbox/Pool） | 2026-08-07 |
+| [BatchSandbox 3s 轮询 Task 执行机制调研](batchsandbox-task-3s-polling-exploration.md) | controller/scheduler/task-executor/CRD 轮询执行机制 | 2026-08-07 |
+| [接入 OpenClaw 方式分析](opensandbox-openclaw-integration-analysis.md) | OpenSandbox 与 OpenClaw 集成方式对比与推荐方案 | 2026-08-12 |
+| [上游 Open Issues 风险调研（禁止暂停/恢复场景）](opensandbox-open-issues-risk-review-no-pause-resume.md) | 无状态沙箱下未修复缺陷与规模化风险（gh 拉取上游 open issues） | 2026-08-13 |
+| [Pool Pod 模板更新与 Pod 分配行为排查](opensandbox-pool-template-update-and-allocation.md) | 模板更新只重建 idle pod、分配不区分 revision、pod→sandbox 无所有权注解、换新 pod 操作指南 | 2026-08-18 |
+| [execd 目录读取工具与 Server Proxy 限制](opensandbox-execd-directory-listing-limits.md) | `/directories/list` 与 `/files/search` 限制、proxy 的 secure-access/runtime-id 门禁 | 2026-08-18 |
+| [沙箱续约机制与伪永久（manual cleanup）调研](opensandbox-sandbox-lease-and-manual-cleanup.md) | TTL 过期、renew-expiration 手动续约、OSEP-0009 自动续约、不传 timeout 伪永久 | 2026-08-18 |
+| [业务流量走 Server Proxy 代理的业务事实梳理](opensandbox-proxy-server-business-facts.md) | 连接拓扑、proxy 行为、自动续约生效条件、生命周期选择与边界 | 2026-08-18 |
+| [Egress 网络策略调研](opensandbox-egress-network-policy.md) | egress 组件定位、sandbox_id 归因、域名/IP 配置、K8s 池模式预置、CAP_NET_ADMIN | 2026-08-19 |
+| [K8s NetworkPolicy vs Egress 边车隔离方案对比](opensandbox-k8s-networkpolicy-vs-egress-sidecar.md) | 两种网络隔离方案的优缺点对比、OpenSandbox 取舍与落地组合 | 2026-08-19 |
+| [池化分配时间点动态注入技术调研](opensandbox-pool-allocation-time-injection.md) | 分配时注入配置/脚本的技术对比（taskTemplate/lifecycle/bootstrap/ConfigMap/exec） | 2026-08-19 |
+| [创建沙箱参数说明书（池化模式）](opensandbox-create-sandbox-params-reference.md) | 池化模式参数（生效/忽略/拒绝）、extensions 编解码、OSEP-0009 续约 | 2026-08-19 |
+| [沙箱管理高阶 API 与参数参考（快速检索）](opensandbox-sandbox-management-api-reference.md) | 按业务能力查 API/参数：创建/注入/续约/查询/池管理；**2026-09-03 补 GET/LIST 响应字段详解与池化状态表（§2.3.1）** | 2026-08-19 |
+| [示例：动态传递用户信息给 task 模板](opensandbox-task-template-user-info-injection-example.md) | user_id + user_auth_token 经 taskTemplate 注入沙箱（env / 文件两种方式） | 2026-08-19 |
+| [池化模式出向管控与 Higress 分层架构](opensandbox-egress-pool-higress-architecture.md) | 定向阻断、特定服务（内外）放行、平台组件/业务运行时隔离、Higress L7 分层、NodePort 场景 | 2026-08-21 |
+| [shardTaskPatches 机制详解与示例](opensandbox-shardtaskpatches-mechanism-and-examples.md) | 异构任务分发机制（strategic merge patch、下标对齐）、适用场景、完整示例与坑 | 2026-08-22 |
+| [沙箱控制器多副本部署与调优参数调研](opensandbox-controller-multi-replica-tuning.md) | leader election 多副本 HA、concurrency/qps/burst 等调优参数清单 | 2026-08-27 |
+| [Pool 容量四参数（poolMin/poolMax/bufferMin/bufferMax）调研](opensandbox-pool-capacity-params.md) | 池模式容量参数定义、滞回伸缩算法、调参要点与边界 | 2026-08-27 |
+| [Pool 池模式扩缩容机理与延迟计算（运维手册）](opensandbox-pool-scaling-mechanism-ops.md) | 事件驱动机理、分配/扩容/缩容延迟公式与示例、参数范围表、观测与排查 | 2026-08-27 |
+| [OSEP-0020 生命周期钩子：实施状态与池模式注入路径](opensandbox-lifecycle-hooks-osep0020-status-and-injection.md) | 🚧 **正在逐步实现的上游功能**：hooks 集与执行通道、分阶段实施状态（PATCH 未实现）、task/alloc 注入链路、池模式限制与替代方案；**2026-09-01 池模式手写 CR 直注实测打通**（periodic/postStop 双路径 + 组件最小镜像矩阵） | 2026-09-01 |
+| [execd 命令执行 vs K8s exec，以及 egress 同 ns 隔离与路由前缀](opensandbox-execd-command-vs-k8s-exec-and-egress-isolation.md) | execd `/command` 与业务侧 `pods/exec` 设计/功能差异；egress 同 namespace 沙箱互隔离；FQDN 之外到不了 HTTP 路由前缀（Higress/Cilium L7） | 2026-09-03 |
+| [Egress 出口管控验证报告：NetworkPolicy 池化隔离 + Credential Vault](opensandbox-egress-netpol-vault-verification.md) | ubuntu k3s 实测：netpol 池化隔离 13/13 用例、Vault 注入 V0–V9 场景（含 Host 形式不一致根因排查）、环境/镜像/权限/sidecar 全记录 | 2026-09-03 |
+| [池模式沙箱 Pod 边车组件介绍与实践指导](opensandbox-pool-sandbox-sidecar-components-guide.md) | task-executor/execd/bootstrap/Jupyter/egress 五组件职责、Pod 装配骨架、execd-as-init 拓扑、端口/认证/权限速查、避坑清单 | 2026-09-03 |
+| [K8s 池模式卷类型、配置限制与副作用实践](opensandbox-pool-mode-volumes-and-storage-practice.md) | spec 三后端（host/pvc/ossfs）支持矩阵、池化拒绝请求卷、回收策略×数据残留（Restart/Noop 泄漏坑）、RWX/RWO 副作用、S3+NAS 落地决策树 | 2026-09-03 |
+| [K8s 池模式三大部署核心配置：controller / server / Pool CR](opensandbox-pool-deploy-core-config-guide.md) | helm values→flag 映射与版本红线、server K8s 运行时配置节（含 `[store]` 无状态澄清：仅存快照元数据、默认 sqlite 不必配 PG）、Pool CR spec/status 全字段、从零到可用 checklist | 2026-09-03 |
+| [池模式启用隔离会话：配置配方、场景边界、得失比对与生产评估](opensandbox-isolated-sessions-pool-mode-enable-and-assessment.md) | ubuntu k3s 实测：池模板启用 bwrap 隔离四前置（bwrap/session-gate/SYS_ADMIN+NET_ADMIN/upper）、与 /command 及 native /session 三通道比对、得失表；**结论：有条件可生产**（binds 损坏、超时杀会话、配额仅分配时等规避集 + 独立池 checklist） | 2026-09-08 |
+| [KEDA 部署验证报告：Redis 队列驱动 Server 扩缩容（k3s 实测）](opensandbox-keda-redis-autoscale-validation.md) | ubuntu k3s 实测闭环（40 条队列→server 1↔3 副本）：版本红线（K8s 1.18↔1.26+）、精准镜像 digest、CRD/APIService 清单、**权限分层**（管理员一次性装 vs 业务开发自助）、测试→生产（2.10.1→2.8.2）差异对照与迁移七步 | 2026-09-13 |
+| [KEDA 服务接入 SOP：任意 Deployment 事件化弹性扩缩](opensandbox-keda-integration-sop.md) | 业务开发自助五步法：可水平扩判定（含 ScaledJob 分支）、信号源选型、ScaledObject/TriggerAuthentication 完整模板与 `副本=ceil(积压/listLength)` 换算、双向验证验收表、运维操作与 7 条坑清单 | 2026-09-13 |
+| [Perplexity SPACE 沙箱架构拆解与 OpenSandbox 可吸收项](opensandbox-vs-perplexity-space-architecture.md) | SPACE 三层架构、pause/suspend 与快照分层、温池 release/slot 状态机、凭据与数据面边界；对照本仓池化/容器/Fast Sandbox 路径，给出 P0–P2 吸收优先级与不吸收项 | 2026-10-23 |
+| [LiteBoxd 文件持久化与恢复机制拆解](liteboxd-persistence-and-recovery-analysis.md) | 每沙箱 PVC + rootfs overlay（upper/work 落盘）+ Deployment 自愈 + DB/K8s reconcile；启动挂载时序、恢复矩阵、删除状态机、镜像漂移/特权 sidecar/无备份等边界，以及与池化 + S3 方案的对照 | 2026-10-23 |
+| [BoxLite 及同类平台状态快照设计参考与 OpenSandbox 吸收清单](opensandbox-boxlite-state-snapshot-design-references.md) | BoxLite QCOW2/外部 COW 快照实现与 issue #205 设计差异；E2B/Modal/Daytona/agent-sandbox 的 fs/memory/TTL/archive 取舍；给出 quiesce 契约、统一 manifest、本地 COW 快照、retention/GC、export/import 的 P0–P2 落点与不吸收项 | 2026-10-23 |
+| [沙箱状态跨节点持久化与恢复：OpenKruise Agents 实践、OpenSandbox 现状与同类方案](opensandbox-cross-node-state-persistence-and-recovery.md) | 状态分层与跨节点三条件；OpenKruise pause/Checkpoint/Commit 与 ACS 休眠策略；OpenSandbox 容器 OCI/QEMU/fsb/池化 + S3；CubeSandbox xfs→S3、CRIU、gVisor、Firecracker、E2B/Modal/Daytona、agent-sandbox/LiteBoxd 对照；选型决策树、不变量、成本与落点 | 2026-10-26 |
+| [DHI 加固建议对照与剩余加固面（含 seccomp 场景影响）](opensandbox-dhi-hardening-gap-and-seccomp-impact.md) | DHI 两篇（use / OpenShift SCC）14 条主张逐条对照本仓现状（execd init hardening 默认关闭、镜像 root、无只读根、SBOM/签名准入空白、securityContext 仅透传 4 字段）；P0–P2 加固清单；seccomp/Landlock/cap drop 三层对常规 agent 场景的边界矩阵、`EACCES` 错误形态、mount 新 API 与 `clone` flag 覆盖缺口、按池缓解配方 | 2026-10-27 |
+| [Open Managed Agents 凭证隔离拆解 + Google Agent Compute Engine / Filestore agent volumes 对照](open-managed-agents-credential-isolation-and-google-agent-storage.md) | 源码核对 OMA（commit `e9a0743`）：**无沙箱**、vault 凭据 AES-256-GCM 只写不读、唯一解密路径是 MCP token 服务端代理、`vault_ids`/`allowed_hosts` 只存不执行、持久化仅事件日志回放；ACE＝Agent Compute Engine（每 agent 硬件隔离 microVM + 每 microVM 一块 Hyperdisk，guest 内零凭据）；**Hyperdisk 是默认加密的块存储，不是文件存储**；**ACE 跨节点重建无公开文档**（文档描述的"快"是同一 host 的 idle→active），可比机制只在 GKE Pod snapshots（gVisor，明确不支持 microVM）与 Agent Substrate（snapshot→GCS + warm Worker，sub-500ms）；P0–P2 吸收项与不吸收项 | 2026-10-30 |
+| [Dragonfly 用于沙箱 S3 工件缓存加速的适用性评估](opensandbox-dragonfly-s3-cache-acceleration-assessment.md) | 三链路分开判定：镜像拉取 ✅（轻量部署 scheduler+client，无 manager/MySQL/Redis）、共享只读数据 ✅（内容不可变、多节点重复读）、per-user 会话工件 ❌（无跨 peer 复用 + 冷路径净负 + 缓存身份过滤签名参数 → 陈旧读与跨租户暴露）；源码级依据「仅 GET 走 P2P，PUT 直通源站」、官方容量账（peer 4C/8G/500Gi）、替代方案对照与 4 步验证清单 | 2026-11-02 |
+| [非池沙箱的节点本地卷暂停/恢复：hostPath 形态、S3 归档与跨节点 P2P 传递](opensandbox-nonpool-node-local-volume-pause-resume.md) | 现有 pause 只 commit 容器可写层、卷不在内的证据链（含 QEMU 拒绝卷内 qcow2）；hostPath/Local PV 两条落地路径与三个缺口（无 per-sandbox 节点亲和、无 Local PV、`DirectoryOrCreate`）；**CubeSandbox（节点本地权威+钉源节点）vs Fast Sandbox（节点本地缓存+S3 权威）两种可吸收形态**及取舍理由；P2P 传活目录的三个前置条件（不可变/可寻址/跨节点复用）+ 12 类传输工具对照；需自建的"逻辑卷 + 节点本地副本"两对象；挂点 `SandboxSnapshot.status.format` / OSEP-0015 `SandboxSnapshotClass.type=Local`；P0~P2 路线与验收 | 2026-11-07 |
+| [微虚机、Docker、gVisor 与裸 runc 沙箱实测：性能、密度与分时复用](opensandbox-microvm-kernel-and-sandbox-metrics-comparison.md) | WSL2 嵌套 KVM 实测 Firecracker / Cloud Hypervisor / QEMU microvm / smolvm / BoxLite、Docker / gVisor 与裸 runc 的启动、PSS/cgroup、CPU、快照与恢复；结论先行动线、统一核心数据表、理论密度上限、保留文件状态的分时复用适配度、agent 沙箱 volume/PVC 形态，以及 OpenSandbox Fast Sandbox 的落点 | 2026-11-15 |
+| [沙箱运行时选型：核心实测结论](opensandbox-sandbox-runtime-selection-core-findings.md) | 从实测提炼：裸 runc 热启动 48 ms / 空闲约 1 MiB、gVisor 原生 77 ms、Firecracker 1.10 s；启动/内存/密度分层结论（“高密度选 FC”仅在必须硬件隔离时成立）；微虚机经 Kata 进 K8s 的链路成本；runc/gVisor + volume/PVC 选型表；未测 K8s/Kata/PVC CSI 的边界 | 2026-11-15 |
+| [沙箱运行时选型：极简版](opensandbox-sandbox-runtime-selection-minimal.md) | 按 STE-zh 简明技术中文编写：五条结论、六行核心数据、五条选型、四条边界；适合快速决策和评审传阅 | 2026-11-15 |
+| [沙箱出口流量如何精准牵引到节点级透明代理（CubeSandbox / OpenShell 拆解与路线选型）](opensandbox-egress-steering-to-node-proxy.md) | 四维控流框架（选流/送流/主体识别/原始目的还原）；CubeSandbox eBPF mark + TPROXY + 透明监听链路与凭证交换；OpenShell 为何不需要节点级透明代理（seccomp/synthetic DNS/per-sandbox supervisor）；R1–R10 十条路线对比、池化/microVM/单机选型与 P0 验收判据 | 2026-11-16 |
+| [gVisor 快照保真度实测：MEMORY / ROOTFS / VOLUMES（WSL2 ptrace，复刻 Agent Substrate MVP）](opensandbox-gvisor-snapshot-fidelity-wsl-benchmark.md) | 无 KVM 的 WSL2 上用 runsc ptrace 复刻 Agent Substrate 三种 fidelity：MEMORY 256 MiB 快照 407 ms / 257.6 MiB、恢复 173 ms；ROOTFS/VOLUMES 制作 12–14 ms、恢复仍约 2.85 s；含多容器 sandbox/app 流程、gVisor 共享 tmpfs 卷、rootless/fscheckpoint 坑，以及和历史 runsc 冷启动、Firecracker/Cloud Hypervisor 的对比 | 2026-11-23 |
+
+## 方案设计
+
+| 文档 | 主题 | 状态 |
+|---|---|---|
+| [用完即焚沙箱编排最佳模式](opensandbox-ephemeral-sandbox-orchestration-pattern.md) | 无状态/任务型沙箱全流程资源生命周期流转 | 方案设计（未实施） |
+| [共享存储挂载解释器镜像最小化与快速启动](opensandbox-shared-storage-interpreter-minimal-image.md) | 解释器镜像瘦身与共享存储加速启动可行性 | 可行性评估（未实施） |
+| [OpenClaw Tool Plugin 设计方案](opensandbox-openclaw-tool-plugin-design.md) | 方式 B：官方 Tool Plugin 封装 JS SDK | 方案设计 |
+| [OpenClaw 插件对接自部署 Server 配置指南](opensandbox-openclaw-plugin-selfdeployed-server.md) | 代理模式下插件对接自部署 OpenSandbox Server | 配置指南 |
+| [池化沙箱业务会话 S3 用户目录静默同步](opensandbox-pooled-session-s3-sync-middleware.md) | 中间层静默恢复/回写；不向业务暴露 exec；固定 postStop + 内部注入脚本 | 部分实施（server） |
+| [Egress 出口管控与 Credential Vault 最佳实践 SOP](opensandbox-egress-netpol-vault-sop.md) | 企业内部署三层管控分层（netpol 基线/敏感沙箱 sidecar/未来 fleet）、SOP-A/B/C/D 操作步骤与陷阱清单；**SOP-D 池化模板预置 egress sidecar（2026-09-03 实测 S1–S9）** | 落地 SOP（已实测） |
+| [池化模式故障排查 Runbook](opensandbox-pool-troubleshooting-runbook.md) | 取证命令包 + 症状对号入座（创建 4xx/429/504、不就绪、派发失败、删不掉、数据残留、限流） | 落地 Runbook |
+| [池化模式监控告警与容量水位 SOP](opensandbox-pool-monitoring-alerting-sop.md) | 池水位采集脚本（Pushgateway）、controller metrics 开启、9 条告警规则与处置联动、验收清单 | 落地 SOP |
+| [OpenSandbox 升级与版本兼容 SOP](opensandbox-upgrade-compat-sop.md) | 兼容矩阵与版本红线、五步升级顺序、灰度三件事、静默抹字段检测、回滚对照表 | 落地 SOP |
+| [池化模式容量规划与压测 SOP](opensandbox-capacity-planning-and-loadtest-sop.md) | 密度画像方法、create 延迟账、三场景压测（含脚本骨架）、capacitySpec 反推配法 | 方法论（数值待实测） |
+| [隔离会话池化落地最佳实践 SOP](opensandbox-isolated-sessions-pool-mode-best-practices-sop.md) | 场景决策表、隔离池部署验收清单（四前置+smoke）、业务接入与会话生命周期规范（SDK 模板+错误语义表）、run 编码规范（exit/超时/env/大输出）、监控告警与故障 runbook、反模式清单与基线速查 | 落地 SOP（已实测） |
+| [池化沙箱日志与产物留存方案](opensandbox-pool-log-artifact-retention.md) | 既定路线：hostPath+日志易采日志、agent CLI 直推 S3 产物；目录规范、凭据注入、清理与验收 | 落地方案 |
+| [K8s 池模式（无 pause/resume）文档覆盖度回顾与优先级建议](opensandbox-pool-mode-wiki-gap-analysis-and-roadmap.md) | 盘点 wiki 32 篇 + exporter 8 cookbook 已覆盖面；缺口清单 P0（Runbook/监控告警/升级 SOP）/P1（容量压测/日志留存/安全加固/多部门接入）/P2 与落地节奏 | 规划建议 |
+| [PR #1425 前后对照：ubuntu k3s 二分复现 + 突发创建相关 issue/PR](opensandbox-pr1425-k3s-bisect-burst-plan.md) | 双节点 k3s 上 controller 镜像 A/B（`0d82d87b^` vs `0d82d87b`）验证 trim 自噬；缩比压测配方；K8s/SDK 两层突发创建相关修复盘点 | 验证方案 |
+| [PR #1425 前后 A/B 对照验证报告](opensandbox-pr1425-k3s-ab-verification.md) | A/B 实测：前侧 trim 删在途 + 池控制器冻结 ≥14min，后侧零冻结/删除封顶；触发条件修正（慢启动+突发，非容量墙）；复现配方与残留确认 | 验证报告 |
+| [Pool scale-in 自噬触发条件证据链](opensandbox-pool-scalein-trigger-evidence-chain.md) | 生产现象→上游 #1423 同构→触发数学（`alloc > 2×supply + 3×midpoint`）→A/B 实证→排除资源限制→前后调谐对照→风暴必要条件→合入后承压判定→对策清单（代码/配置/业务运维） | 证据链整合+对策 |
+| [execd init 模式实施指导（OSEP-0018）](opensandbox-execd-init-rollout-guide.md) | 🚧 **池模式视角**：逐项能力收益判定表（Pool task=subreaper vs 模板 PID1）、显式成本账（≈0 常驻 vs eBPF 提权/运维）、三步落地路线（hardening+Landlock 全量→长会话池 PID1→敏感池 eBPF）与明确不追的收益；附**命令执行审查**与**网络审查**分层矩阵 | 实施指导（默认关闭，待灰度） |
+| [池模式调谐与运行时优化指导](opensandbox-pool-tuning-and-assign-guide.md) | 自动分配全链路（poolRef 三取值/谓词五件套/Profile ConfigMap 热加载与三层回退）、**谓词输入来源修正（server 池模式下 image/resource/nodeselector 直通，labels 是唯一主动路由条件）**、LeastAllocated vs MostAllocated 选型、多池收益/成本评估（拆/不拆判定规则）、回收三策略选型、业务方申请契约与检查清单、9 条坑清单 | 落地指导 |
+| [OpenShell 可移植策略设计](opensandbox-openshell-portable-policy-design.md) | 从 OpenShell（commit `1358941` 源码核对）筛选可移植项：前提 `fail-open but honest`（延续 OSEP-0018）、A 档五项（audit/enforce 灰度、结构化事件、SSRF 基线、凭据独立双边界、run_as+策略 diff）、B 档三项（边界确认降级为可观测状态、隔离会话 FS allowlist、凭据轮转 readiness）、C 档四项不移植及替代路径（L7 交 Higress/Cilium） | 方案设计（未实施） |
+
+## 参考
+
+| 文档 | 主题 |
+|---|---|
+| [沙箱配置参数与环境变量参考（全链路）](opensandbox-sandbox-config-and-env-reference.md) | server 配置 → pod/容器 env 注入 → execd / task-executor / egress / Jupyter |
+| [Egress 实现细节进阶参考（附录）](opensandbox-egress-internals-reference.md) | egress 内部机制：TTL、iptables/nft、HTTP API 细节、环境变量全集（主文档引用，非业务必读） |
+
+## 关联关系速览
+
+```
+crd-controller-reconcile-analysis ──┬── controller-defects-and-pitfalls ──┬── ephemeral-sandbox-orchestration-pattern
+                                   │                                      │         └── pooled-session-s3-sync-middleware
+                                   │                                      └── shared-storage-interpreter-minimal-image
+                                   └── sandbox-config-and-env-reference
+                                        └── pool-template-update-and-allocation
+batchsandbox-task-3s-polling-exploration ──┬── shardtaskpatches-mechanism-and-examples
+                                           └── task-template-user-info-injection-example
+openclaw-integration-analysis ──┬── openclaw-tool-plugin-design ──┬── openclaw-plugin-selfdeployed-server
+                                └── open-issues-risk-review-no-pause-resume
+openclaw-tool-plugin-design ──┴── execd-directory-listing-limits
+egress-network-policy ──┬── k8s-networkpolicy-vs-egress-sidecar
+                        └── egress-pool-higress-architecture ──┬── egress-internals-reference（附录）
+                                                                └── exporter/egress-network-policy-cookbook（落地）
+execd-command-vs-k8s-exec-and-egress-isolation ──┬── pool-allocation-time-injection（k8s exec vs taskTemplate）
+                                               └── egress-pool-higress-architecture（L7 路由前缀）
+egress-netpol-vault-verification ──┬── egress-netpol-vault-sop（落地 SOP）
+                                   ├── k8s-networkpolicy-vs-egress-sidecar（选型依据）
+                                   └── exporter/credential-vault-cookbook（Vault 机制）
+pool-sandbox-sidecar-components-guide ──┬── pool-deploy-core-config-guide（Pool 模板装配 + 部署配置）
+                                        ├── pool-mode-volumes-and-storage-practice（模板卷选型与残留坑）
+                                        └── sandbox-config-and-env-reference（env 全集）
+pool-mode-wiki-gap-analysis-and-roadmap ──（盘点全量 wiki + exporter cookbook，运维层缺口规划）
+isolated-sessions-pool-mode-enable-and-assessment ──┬── isolated-sessions-pool-mode-best-practices-sop（落地 SOP）
+                                                    ├── isolation-sessions.md（官方指南，实测一致）
+                                                    ├── pool-sandbox-sidecar-components-guide（Pod 装配）
+                                                    └── k8s-networkpolicy-vs-egress-sidecar（网络隔离选型）
+liteboxd-persistence-and-recovery-analysis ── opensandbox-boxlite-state-snapshot-design-references（状态持久化外部参考）
+opensandbox-vs-perplexity-space-architecture ── opensandbox-boxlite-state-snapshot-design-references（两级暂停/快照分层互补）
+opensandbox-boxlite-state-snapshot-design-references ── opensandbox-cross-node-state-persistence-and-recovery（跨节点恢复综合）
+open-managed-agents-credential-isolation-and-google-agent-storage ──┬── egress-netpol-vault-sop（沙箱零凭据 + 控制面代理注入的对照）
+                                                                   ├── pooled-session-s3-sync-middleware（对话态/配置态/文件态三档持久化）
+                                                                   ├── pool-mode-volumes-and-storage-practice（租户级卷隔离与 HOT/WARM/COLD 分层）
+                                                                   ├── vm-microvm-remote-storage-mount-forms（共享块设备的多写语义）
+                                                                   └── opensandbox-vs-perplexity-space-architecture（凭据与数据面边界互补）
+dragonfly-s3-cache-acceleration-assessment ──┬── pooled-session-s3-sync-middleware（③ 链路：per-user 恢复/回写不接 P2P）
+                                             ├── shared-storage-interpreter-minimal-image（② 共享数据读取的镜像侧加速）
+                                             ├── pool-mode-volumes-and-storage-practice（节点盘预算：hostPath/emptyDir 之外再加缓存盘）
+                                             └── k8s-networkpolicy-vs-egress-sidecar（P2P 跨节点通路与 namespace 隔离的冲突）
+nonpool-node-local-volume-pause-resume ──┬── cross-node-state-persistence-and-recovery（状态分层与同类方案总览）
+                                         ├── boxlite-state-snapshot-design-references（快照机制与吸收清单）
+                                         ├── dragonfly-s3-cache-acceleration-assessment（P2P 对 per-user 内容不回本的判定）
+                                         └── pooled-session-s3-sync-middleware（S3 权威副本与静态恢复/回写的既有形态）
+```
